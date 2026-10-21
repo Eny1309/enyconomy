@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enyconomy</title>
+<style>
+:root {
+  --bg: #0d0f14; --panel: #151821; --panel2: #1b1f2a; --line: #262b38;
+  --text: #e6e8ee; --muted: #8a90a2; --accent: #f5c542; --accent2: #8b7cf6;
+  --green: #3ddc84; --red: #ff5c5c; --orange: #ffa94d;
+  --poor: #9d9d9d; --common: #ffffff; --uncommon: #1eff00; --rare: #0070dd; --epic: #a335ee; --legendary: #ff8000;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; align-items: center; gap: 18px; padding: 14px 22px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header h1 { margin: 0; font-size: 20px; letter-spacing: .3px; }
+header h1 span { color: var(--accent); }
+#meta { color: var(--muted); font-size: 13px; flex: 1; }
+button, select, input { font: inherit; color: var(--text); }
+.btn { background: var(--accent2); border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; font-weight: 600; }
+.btn:disabled { opacity: .5; cursor: default; }
+nav { display: flex; gap: 6px; padding: 12px 22px 0; border-bottom: 1px solid var(--line); }
+nav button { background: var(--panel); border: 1px solid var(--line); border-bottom: 0; border-radius: 10px 10px 0 0;
+             padding: 9px 18px; cursor: pointer; color: var(--muted); font-weight: 600; }
+nav button.on { color: var(--text); border-top: 2px solid var(--accent2); background: var(--panel2); }
+main { display: grid; grid-template-columns: 250px 1fr; min-height: calc(100vh - 120px); }
+aside { border-right: 1px solid var(--line); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+aside label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+aside input[type=text], aside input[type=number], aside select {
+  width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--text); }
+.check input { accent-color: var(--accent2); }
+.hint { font-size: 12px; color: var(--muted); }
+section { overflow: auto; display: flex; flex-direction: column; }
+table { width: 100%; border-collapse: collapse; }
+th { position: sticky; top: 0; background: var(--panel2); color: var(--muted); font-size: 11px; text-transform: uppercase;
+     letter-spacing: .6px; text-align: left; padding: 10px 10px; cursor: pointer; white-space: nowrap; border-bottom: 1px solid var(--line); }
+th.num, td.num { text-align: right; }
+th.sorted { color: var(--accent2); }
+td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+tr:hover td { background: #161a24; }
+.item { display: flex; align-items: center; gap: 10px; }
+.item img { width: 30px; height: 30px; border-radius: 5px; border: 1px solid var(--line); }
+.item .nm { font-weight: 600; cursor: pointer; }
+.item .sub { font-size: 12px; color: var(--muted); }
+.item a { color: var(--muted); text-decoration: none; font-size: 12px; margin-left: 6px; }
+.q-POOR { color: var(--poor); } .q-COMMON { color: var(--common); } .q-UNCOMMON { color: var(--uncommon); }
+.q-RARE { color: var(--rare); } .q-EPIC { color: var(--epic); } .q-LEGENDARY { color: var(--legendary); }
+.g { color: var(--green); font-weight: 600; } .r { color: var(--red); } .o { color: var(--orange); }
+.est { color: var(--orange); cursor: help; }
+.pager { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 10px 16px; color: var(--muted); }
+.pager button { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 14px; cursor: pointer; }
+.totals { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); margin-top: auto; }
+.totals div { padding: 14px 22px; border-right: 1px solid var(--line); }
+.totals small { color: var(--muted); display: block; }
+.totals b { font-size: 24px; }
+.detail td { background: var(--panel); white-space: normal; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.empty { padding: 40px; text-align: center; color: var(--muted); }
+#toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--panel2);
+         border: 1px solid var(--line); padding: 8px 16px; border-radius: 8px; opacity: 0; transition: opacity .2s; }
+.status-grid { padding: 20px; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+.card h3 { margin: 0 0 6px; font-size: 15px; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>Eny</span>conomy</h1>
+  <div id="meta">Lade ...</div>
+  <button class="btn" id="scanBtn">Jetzt scannen</button>
+</header>
+<nav>
+  <button data-tab="flips" class="on">Flips</button>
+  <button data-tab="deals">Deals</button>
+  <button data-tab="status">Status</button>
+</nav>
+<main>
+  <aside id="filters"></aside>
+  <section>
+    <div id="content" style="flex:1"></div>
+    <div class="pager" id="pager"></div>
+    <div class="totals" id="totals"></div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const QUAL = { POOR: "Schlecht", COMMON: "Gewöhnlich", UNCOMMON: "Selten", RARE: "Rar", EPIC: "Episch", LEGENDARY: "Legendär", PET: "Haustier" };
+let tab = "flips", realms = [], state = { offset: 0, limit: 50, sort: "profit", desc: true };
+
+const FILTERS = {
+  flips: [
+    { k: "q", label: "Item suchen", type: "text" },
+    { row: [{ k: "min_profit", label: "Min. Gewinn (g)", type: "number", v: 100 },
+            { k: "min_return", label: "Min. Rendite %", type: "number", v: 30 }] },
+    { row: [{ k: "min_rate", label: "Min. Verkaufsrate", type: "number", v: 0.02, step: 0.01 },
+            { k: "min_spd", label: "Min. /Tag", type: "number", v: 0, step: 0.1 }] },
+    { k: "max_buy", label: "Max. Kaufpreis (g, 0 = egal)", type: "number", v: 0 },
+    { k: "buy", label: "Kaufen auf", type: "realm" },
+    { k: "sell", label: "Verkaufen auf", type: "realm" },
+    { k: "category", label: "Kategorie enthält (z. B. Rüstung, Haustier)", type: "text" },
+    { k: "estimated", label: "Auch Realms ohne Angebot (geschätzt)", type: "check", v: true },
+    { k: "all_sells", label: "Jeden Verkaufs-Realm einzeln zeigen", type: "check", v: false },
+    { hint: "Verkaufspreis = niedrigerer Wert aus Region-Verkaufs-Ø (TSM) und aktuellem Mindestpreis dort, minus 5 % Gebühr. Seelengebundenes ist ausgefiltert." },
+  ],
+  deals: [
+    { k: "q", label: "Item suchen", type: "text" },
+    { row: [{ k: "min_pct", label: "Min. unter Ø %", type: "number", v: 25 },
+            { k: "min_profit", label: "Min. Gewinn (g)", type: "number", v: 50 }] },
+    { row: [{ k: "min_rate", label: "Min. Verkaufsrate", type: "number", v: 0.02, step: 0.01 },
+            { k: "min_spd", label: "Min. /Tag", type: "number", v: 0, step: 0.1 }] },
+    { k: "realm", label: "Realm", type: "realm" },
+    { k: "category", label: "Kategorie enthält", type: "text" },
+    { hint: "Günstig im Vergleich zum Region-Verkaufs-Ø - kaufen und auf demselben Realm wieder einstellen." },
+  ],
+  status: [],
+};
+
+const COLS = {
+  flips: [
+    { k: "name", t: "Item", f: itemCell },
+    { k: "quality", t: "Qualität", f: r => `<span class="q-${r.quality}">${QUAL[r.quality] || "-"}</span>` },
+    { k: "buy_realm", t: "Kaufen auf" },
+    { k: "buy", t: "Kaufpreis", num: 1, f: r => gold(r.buy) },
+    { k: "qty", t: "Anz.", num: 1 },
+    { k: "sell_realm", t: "Verkaufen auf", f: r => r.estimated ? `<span class="est" title="Dort kein Angebot - geschätzt mit Region-Verkaufs-Ø">${r.sell_realm} *</span>` : r.sell_realm },
+    { k: "usual", t: "Üblich (Ø)", num: 1, f: r => gold(r.usual) },
+    { k: "lowest_there", t: "Dort jetzt", num: 1, f: r => r.lowest_there ? gold(r.lowest_there) : '<span class="o">keins</span>' },
+    { k: "sale_rate", t: "Rate", num: 1, f: r => fix(r.sale_rate, 3) },
+    { k: "sold_per_day", t: "/Tag", num: 1, f: r => fix(r.sold_per_day, 2) },
+    { k: "profit", t: "Gewinn", num: 1, f: r => `<span class="g">${gold(r.profit)}</span>` },
+    { k: "ret", t: "Rendite", num: 1, f: r => `<span class="g">${Math.round(r.ret).toLocaleString("de-DE")} %</span>` },
+  ],
+  deals: [
+    { k: "name", t: "Item", f: itemCell },
+    { k: "quality", t: "Qualität", f: r => `<span class="q-${r.quality}">${QUAL[r.quality] || "-"}</span>` },
+    { k: "realm", t: "Realm" },
+    { k: "buy", t: "Preis", num: 1, f: r => gold(r.buy) },
+    { k: "n", t: "Angebote", num: 1 },
+    { k: "usual", t: "Verkaufs-Ø", num: 1, f: r => gold(r.usual) },
+    { k: "market", t: "Marktwert", num: 1, f: r => gold(r.market) },
+    { k: "pct", t: "Ø über", num: 1, f: r => `${Math.round(r.pct)} %` },
+    { k: "sale_rate", t: "Rate", num: 1, f: r => fix(r.sale_rate, 3) },
+    { k: "sold_per_day", t: "/Tag", num: 1, f: r => fix(r.sold_per_day, 2) },
+    { k: "profit", t: "Gewinn", num: 1, f: r => `<span class="g">${gold(r.profit)}</span>` },
+  ],
+};
+
+function gold(c) {
+  if (c == null) return "-";
+  const g = c / 10000;
+  if (Math.abs(g) >= 100) return Math.round(g).toLocaleString("de-DE") + "g";
+  return g.toLocaleString("de-DE", { maximumFractionDigits: 1 }) + "g";
+}
+function fix(v, d) { return v == null ? "-" : Number(v).toLocaleString("de-DE", { maximumFractionDigits: d }); }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function ago(ts) {
+  if (!ts) return "nie";
+  const d = Date.now() / 1000 - ts;
+  if (d < 3600) return Math.round(d / 60) + " min";
+  if (d < 86400) return Math.round(d / 3600) + " h";
+  return Math.round(d / 86400) + " T";
+}
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.style.opacity = 1; setTimeout(() => t.style.opacity = 0, 1500); }
+
+function itemCell(r) {
+  const link = r.pet ? `https://www.wowhead.com/de/battle-pet/${r.id}` : `https://www.wowhead.com/de/item=${r.id}`;
+  const icon = r.icon ? `<img src="${esc(r.icon)}" alt="">` : `<img alt="">`;
+  const sub = [r.class, r.subclass, r.level ? "St. " + r.level : null].filter(Boolean).join(" · ");
+  return `<div class="item">${icon}<div><span class="nm q-${r.quality}" data-copy="${esc(r.name)}" title="Klick: Name kopieren (für die AH-Suche)">${esc(r.name)}</span>
+    <a href="${link}" target="_blank" rel="noopener">wowhead ↗</a><div class="sub">${esc(sub)}</div></div></div>`;
+}
+
+function readFilters() {
+  const p = {};
+  document.querySelectorAll("#filters [data-k]").forEach(el => {
+    p[el.dataset.k] = el.type === "checkbox" ? el.checked : el.value;
+  });
+  return p;
+}
+
+function saveFilters() {
+  try { localStorage.setItem("eny-" + tab, JSON.stringify(readFilters())); } catch (e) {}
+}
+
+function field(f, saved) {
+  const v = saved[f.k] ?? f.v ?? "";
+  if (f.type === "check")
+    return `<label class="check"><input type="checkbox" data-k="${f.k}" ${v ? "checked" : ""}> ${f.label}</label>`;
+  if (f.type === "realm")
+    return `<div><label>${f.label}</label><select data-k="${f.k}"><option value="0">Alle eigenen Realms</option>${
+      realms.map(r => `<option value="${r.cr_id}" ${String(v) === String(r.cr_id) ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></div>`;
+  return `<div><label>${f.label}</label><input type="${f.type}" data-k="${f.k}" value="${esc(v)}" ${f.step ? `step="${f.step}"` : ""}></div>`;
+}
+
+function buildFilters() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("eny-" + tab) || "{}"); } catch (e) {}
+  $("#filters").innerHTML = FILTERS[tab].map(f =>
+    f.hint ? `<div class="hint">${f.hint}</div>` :
+    f.row ? `<div class="row2">${f.row.map(x => field(x, saved)).join("")}</div>` : field(f, saved)).join("")
+    + (FILTERS[tab].length ? `<button class="pager" style="justify-content:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;cursor:pointer" id="reset">Filter zurücksetzen</button>` : "");
+  let timer;
+  $("#filters").oninput = () => { clearTimeout(timer); timer = setTimeout(() => { state.offset = 0; saveFilters(); load(); }, 350); };
+  const reset = $("#reset");
+  if (reset) reset.onclick = () => { try { localStorage.removeItem("eny-" + tab); } catch (e) {} buildFilters(); load(); };
+}
+
+async function load() {
+  if (tab === "status") return loadStatus();
+  const p = new URLSearchParams({ ...readFilters(), sort: state.sort, desc: state.desc, offset: state.offset, limit: state.limit });
+  $("#content").innerHTML = `<div class="empty">Rechne ...</div>`;
+  const res = await fetch(`/api/${tab}?` + p);
+  const data = await res.json();
+  render(data);
+}
+
+function render(data) {
+  const cols = COLS[tab];
+  if (!data.rows.length) {
+    $("#content").innerHTML = `<div class="empty">Keine Treffer. Filter lockern oder auf den ersten Scan warten (Tab Status).</div>`;
+  } else {
+    $("#content").innerHTML = `<table><thead><tr>${cols.map(c =>
+      `<th data-s="${c.k}" class="${c.num ? "num" : ""} ${state.sort === c.k ? "sorted" : ""}">${c.t}${state.sort === c.k ? (state.desc ? " ▼" : " ▲") : ""}</th>`).join("")}</tr></thead>
+      <tbody>${data.rows.map((r, i) => `<tr data-i="${i}">${cols.map(c =>
+        `<td class="${c.num ? "num" : ""}">${c.f ? c.f(r) : esc(r[c.k] ?? "-")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    document.querySelectorAll("th[data-s]").forEach(th => th.onclick = () => {
+      const k = th.dataset.s;
+      if (state.sort === k) state.desc = !state.desc; else { state.sort = k; state.desc = !["name", "buy_realm", "sell_realm", "realm"].includes(k); }
+      state.offset = 0; load();
+    });
+    document.querySelectorAll("tbody tr[data-i]").forEach(tr => tr.onclick = ev => {
+      const copy = ev.target.closest("[data-copy]");
+      if (copy) { navigator.clipboard?.writeText(copy.dataset.copy); toast("Kopiert: " + copy.dataset.copy); return; }
+      if (ev.target.closest("a")) return;
+      toggleDetail(tr, data.rows[+tr.dataset.i]);
+    });
+  }
+  const pages = Math.max(1, Math.ceil(data.total / state.limit)), cur = Math.floor(state.offset / state.limit) + 1;
+  $("#pager").innerHTML = `${data.total.toLocaleString("de-DE")} Treffer
+    <button id="prev" ${cur <= 1 ? "disabled" : ""}>Zurück</button> Seite ${cur} von ${pages}
+    <button id="next" ${cur >= pages ? "disabled" : ""}>Weiter</button>`;
+  $("#prev").onclick = () => { state.offset -= state.limit; load(); };
+  $("#next").onclick = () => { state.offset += state.limit; load(); };
+  $("#totals").innerHTML = `<div><small>Einsatz gesamt</small><b>${gold(data.sum_buy)}</b></div>
+    <div><small>Erwarteter Erlös (nach Gebühr)</small><b style="color:var(--accent)">${gold(data.sum_sell)}</b></div>
+    <div><small>Gewinn gesamt</small><b class="g">${gold(data.sum_profit)}</b></div>`;
+}
+
+async function toggleDetail(tr, r) {
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains("detail")) { next.remove(); return; }
+  const d = await (await fetch(`/api/item/${r.key}`)).json();
+  const t = d.tsm || {};
+  const row = document.createElement("tr");
+  row.className = "detail";
+  row.innerHTML = `<td colspan="${COLS[tab].length}"><div class="chips">
+    ${d.realms.map(x => `<div class="chip"><b>${esc(x.name)}</b>: ${x.min ? gold(x.min) + " (" + x.qty + ")" : '<span class="o">nicht da</span>'}</div>`).join("")}
+    <div class="chip">TSM Verkaufs-Ø: <b>${gold(t.sale_avg)}</b></div>
+    <div class="chip">Marktwert: <b>${gold(t.market)}</b></div>
+    <div class="chip">Historisch: <b>${gold(t.historical)}</b></div>
+    <div class="chip">Rate: <b>${fix(t.sale_rate, 3)}</b> · /Tag: <b>${fix(t.sold_per_day, 2)}</b></div>
+  </div></td>`;
+  tr.after(row);
+}
+
+async function loadStatus() {
+  $("#pager").innerHTML = ""; $("#totals").innerHTML = "";
+  const s = await (await fetch("/api/status")).json();
+  $("#content").innerHTML = `<div class="status-grid">
+    <div class="card"><h3>Letzter Lauf</h3>vor ${ago(+s.last_run)} ${s.running ? '· <span class="o">läuft gerade</span>' : ""}<br>
+      <span class="hint">Automatisch alle ${s.scan_minutes} min</span></div>
+    <div class="card"><h3>TSM-Daten</h3>vor ${ago(+s.tsm_updated)} · ${s.tsm_items.toLocaleString("de-DE")} Items</div>
+    <div class="card"><h3>Item-Infos</h3>${s.items_meta.toLocaleString("de-DE")} Items mit Namen</div>
+    ${s.last_error ? `<div class="card"><h3 class="r">Letzter Fehler</h3><span class="hint">${esc(s.last_error)}</span></div>` : ""}
+    ${s.realms.map(r => `<div class="card"><h3>${esc(r.name)}</h3>Snapshot vor ${ago(r.fetched_at)}<br>
+      <span class="hint">${(r.auctions || 0).toLocaleString("de-DE")} Auktionen · ${(r.items || 0).toLocaleString("de-DE")} Items</span></div>`).join("")}
+  </div>`;
+}
+
+async function header() {
+  try {
+    const s = await (await fetch("/api/status")).json();
+    $("#meta").textContent = `Letzter Lauf vor ${ago(+s.last_run)} · ${s.realms.length} Realm-Gruppen · TSM vor ${ago(+s.tsm_updated)}`
+      + (s.running ? " · Scan läuft ..." : "");
+    $("#scanBtn").disabled = s.running;
+  } catch (e) { $("#meta").textContent = "Server nicht erreichbar"; }
+}
+
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
+  tab = b.dataset.tab; state = { offset: 0, limit: 50, sort: "profit", desc: true };
+  buildFilters(); load();
+});
+$("#scanBtn").onclick = async () => { await fetch("/api/scan", { method: "POST" }); toast("Scan gestartet"); setTimeout(header, 1500); };
+
+(async () => {
+  try { realms = await (await fetch("/api/realms")).json(); } catch (e) {}
+  buildFilters(); load(); header(); setInterval(header, 60000);
+})();
+</script>
+</body>
+</html>

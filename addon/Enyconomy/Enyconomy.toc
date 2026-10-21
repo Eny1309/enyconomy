@@ -1,0 +1,9 @@
+## Interface: 120105
+## Title: Enyconomy
+## Notes: Lücken, Deals, Herstellen und Realm-Vergleich - AH-Vollscan + TSM-Daten
+## Author: Eny
+## Version: 0.8
+## OptionalDeps: TradeSkillMaster
+## SavedVariables: EnyconomyDB
+
+Enyconomy.lua

@@ -1,0 +1,10 @@
+services:
+  enyconomy:
+    build: .
+    container_name: enyconomy
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data

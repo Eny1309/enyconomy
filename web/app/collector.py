@@ -1,0 +1,379 @@
+"""Enyconomy Web - Datensammler.
+
+Holt stündlich die Auktionen deiner Realm-Gruppen von der Blizzard-API,
+regelmäßig die Regionsdaten von TSM und Item-Metadaten (deutsche Namen,
+Qualität, Bindung) und schreibt alles in SQLite.
+"""
+import logging
+import os
+import re
+import sqlite3
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+import requests
+
+log = logging.getLogger("collector")
+
+REGION = os.environ.get("REGION", "eu")
+LOCALE = os.environ.get("LOCALE", "de_DE")
+API = f"https://{REGION}.api.blizzard.com"
+DB_PATH = os.environ.get("DB_PATH", "/data/enyconomy.db")
+SCAN_MINUTES = int(os.environ.get("SCAN_MINUTES", "60"))
+TSM_HOURS = float(os.environ.get("TSM_HOURS", "6"))
+PET_CAGE = 82800
+
+# Öffentliche Client-ID der TSM-API (aus der TSM-API-Doku), dazu dein persönlicher API-Key
+TSM_CLIENT_ID = "c260f00d-1071-409a-992f-dda2e5498536"
+
+
+# --------------------------------------------------------------------------
+# Datenbank
+# --------------------------------------------------------------------------
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS realm (cr_id INTEGER, name TEXT, slug TEXT, PRIMARY KEY (cr_id, slug));
+CREATE TABLE IF NOT EXISTS snapshot (cr_id INTEGER PRIMARY KEY, last_modified TEXT, fetched_at INTEGER, n_auctions INTEGER);
+CREATE TABLE IF NOT EXISTS listing (cr_id INTEGER, item_key TEXT, min_buyout INTEGER, qty INTEGER, n INTEGER,
+                                    PRIMARY KEY (cr_id, item_key));
+CREATE INDEX IF NOT EXISTS listing_item ON listing (item_key);
+CREATE TABLE IF NOT EXISTS item (item_key TEXT PRIMARY KEY, name TEXT, quality TEXT, class_id INTEGER,
+                                 class_name TEXT, subclass_name TEXT, binding TEXT, level INTEGER,
+                                 icon TEXT, fetched_at INTEGER, ok INTEGER);
+CREATE TABLE IF NOT EXISTS tsm (item_key TEXT PRIMARY KEY, market INTEGER, historical INTEGER, sale_avg INTEGER,
+                                sale_rate REAL, sold_per_day REAL, updated INTEGER);
+CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+"""
+
+
+def db():
+    con = sqlite3.connect(DB_PATH, timeout=60)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA journal_mode=WAL")
+    return con
+
+
+def init_db():
+    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    with db() as con:
+        con.executescript(SCHEMA)
+
+
+def meta_get(con, k, default=None):
+    row = con.execute("SELECT v FROM meta WHERE k=?", (k,)).fetchone()
+    return row["v"] if row else default
+
+
+def meta_set(con, k, v):
+    con.execute("INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)", (k, str(v)))
+
+
+def norm(name):
+    """Realmnamen vergleichbar machen: 'Die Aldor' -> 'diealdor'."""
+    return re.sub(r"[^a-z0-9äöüß]", "", (name or "").lower())
+
+
+def tracked_realms():
+    raw = os.environ.get("REALMS", "")
+    if raw.strip().lower() == "all":
+        return "all"
+    return [r.strip() for r in raw.split(",") if r.strip()]
+
+
+# --------------------------------------------------------------------------
+# Blizzard-API
+# --------------------------------------------------------------------------
+class Blizzard:
+    def __init__(self, client_id, secret):
+        self.client_id, self.secret = client_id, secret
+        self.token, self.expires = None, 0
+        self.sess = requests.Session()
+
+    def _token(self):
+        if self.token and time.time() < self.expires - 60:
+            return self.token
+        r = requests.post("https://oauth.battle.net/token", data={"grant_type": "client_credentials"},
+                          auth=(self.client_id, self.secret), timeout=30)
+        r.raise_for_status()
+        j = r.json()
+        self.token, self.expires = j["access_token"], time.time() + j.get("expires_in", 3600)
+        return self.token
+
+    def get(self, path, namespace, headers=None, absolute=False):
+        url = path if absolute else API + path
+        params = {} if absolute else {"namespace": f"{namespace}-{REGION}", "locale": LOCALE}
+        h = {"Authorization": f"Bearer {self._token()}"}
+        h.update(headers or {})
+        for attempt in range(5):
+            r = self.sess.get(url, params=params, headers=h, timeout=180)
+            if r.status_code == 429:
+                time.sleep(2 ** attempt)
+                continue
+            if r.status_code == 304:
+                return None, r
+            if r.status_code == 404:
+                return {}, r
+            r.raise_for_status()
+            return r.json(), r
+        r.raise_for_status()
+
+
+def refresh_realms(bz):
+    """Alle Realm-Gruppen der Region mit ihren Realmnamen einlesen (einmal am Tag)."""
+    idx, _ = bz.get("/data/wow/connected-realm/index", "dynamic")
+    links = [x["href"] for x in idx.get("connected_realms", [])]
+    rows = []
+
+    def one(href):
+        data, _ = bz.get(href.split("?")[0] + f"?namespace=dynamic-{REGION}&locale={LOCALE}", "dynamic", absolute=True)
+        out = []
+        for realm in (data or {}).get("realms", []):
+            name = realm.get("name")
+            if isinstance(name, dict):
+                name = name.get(LOCALE) or next(iter(name.values()), "")
+            out.append((data["id"], name, realm.get("slug")))
+        return out
+
+    with ThreadPoolExecutor(8) as ex:
+        for part in ex.map(one, links):
+            rows.extend(part)
+    with db() as con:
+        con.execute("DELETE FROM realm")
+        con.executemany("INSERT OR REPLACE INTO realm (cr_id, name, slug) VALUES (?, ?, ?)", rows)
+        meta_set(con, "realms_updated", int(time.time()))
+    log.info("Realm-Gruppen: %d Realms in %d Gruppen", len(rows), len(links))
+
+
+def tracked_cr_ids():
+    """Realm-Gruppen-IDs zu den Realms aus REALMS (oder alle)."""
+    want = tracked_realms()
+    with db() as con:
+        rows = con.execute("SELECT cr_id, name, slug FROM realm").fetchall()
+    if want == "all":
+        return sorted({r["cr_id"] for r in rows})
+    ids, missing = set(), []
+    for w in want:
+        hit = [r["cr_id"] for r in rows if norm(r["name"]) == norm(w) or norm(r["slug"]) == norm(w)]
+        if hit:
+            ids.update(hit)
+        else:
+            missing.append(w)
+    if missing:
+        log.warning("Realm(s) nicht gefunden: %s", ", ".join(missing))
+    return sorted(ids)
+
+
+def item_key(item):
+    if item.get("id") == PET_CAGE and item.get("pet_species_id"):
+        return f"p:{item['pet_species_id']}"
+    return f"i:{item['id']}"
+
+
+def fetch_auctions(bz, cr_id):
+    with db() as con:
+        row = con.execute("SELECT last_modified FROM snapshot WHERE cr_id=?", (cr_id,)).fetchone()
+    headers = {"If-Modified-Since": row["last_modified"]} if row and row["last_modified"] else {}
+    data, resp = bz.get(f"/data/wow/connected-realm/{cr_id}/auctions", "dynamic", headers=headers)
+    if data is None:
+        log.info("Realm-Gruppe %d: keine neuen Daten", cr_id)
+        return False
+    agg = {}
+    n = 0
+    for a in data.get("auctions", []):
+        buyout = a.get("buyout")
+        qty = a.get("quantity") or 1
+        if not buyout or "item" not in a:
+            continue
+        n += 1
+        key = item_key(a["item"])
+        unit = buyout // qty
+        e = agg.get(key)
+        if e is None:
+            agg[key] = [unit, qty, 1]
+        else:
+            if unit < e[0]:
+                e[0] = unit
+            e[1] += qty
+            e[2] += 1
+    with db() as con:
+        con.execute("DELETE FROM listing WHERE cr_id=?", (cr_id,))
+        con.executemany("INSERT INTO listing (cr_id, item_key, min_buyout, qty, n) VALUES (?, ?, ?, ?, ?)",
+                        [(cr_id, k, v[0], v[1], v[2]) for k, v in agg.items()])
+        con.execute("INSERT OR REPLACE INTO snapshot (cr_id, last_modified, fetched_at, n_auctions) VALUES (?, ?, ?, ?)",
+                    (cr_id, resp.headers.get("Last-Modified"), int(time.time()), n))
+    log.info("Realm-Gruppe %d: %d Auktionen, %d Items", cr_id, n, len(agg))
+    return True
+
+
+# --------------------------------------------------------------------------
+# Item-Metadaten (deutsche Namen, Qualität, Bindung, Icon)
+# --------------------------------------------------------------------------
+def fetch_item_meta(bz, key):
+    kind, num = key.split(":")
+    try:
+        if kind == "p":
+            data, _ = bz.get(f"/data/wow/pet/{num}", "static")
+            if not data:
+                return (key, None, None, None, None, None, None, None, None, int(time.time()), 0)
+            icon = data.get("icon")
+            return (key, data.get("name"), "PET", 17, "Haustier", None,
+                    None if data.get("is_tradable", True) else "ON_ACQUIRE", None, icon, int(time.time()), 1)
+        data, _ = bz.get(f"/data/wow/item/{num}", "static")
+        if not data:
+            return (key, None, None, None, None, None, None, None, None, int(time.time()), 0)
+        icon = None
+        media, _ = bz.get(f"/data/wow/media/item/{num}", "static")
+        for asset in (media or {}).get("assets", []):
+            if asset.get("key") == "icon":
+                icon = asset.get("value")
+        binding = ((data.get("preview_item") or {}).get("binding") or {}).get("type")
+        return (key, data.get("name"), (data.get("quality") or {}).get("type"),
+                (data.get("item_class") or {}).get("id"), (data.get("item_class") or {}).get("name"),
+                (data.get("item_subclass") or {}).get("name"), binding, data.get("level"), icon,
+                int(time.time()), 1)
+    except requests.RequestException as e:
+        log.warning("Item %s: %s", key, e)
+        return None
+
+
+def fill_item_meta(bz, min_sale=100_000):
+    """Metadaten für alle Items holen, die irgendwo angeboten werden und laut TSM etwas wert sind."""
+    with db() as con:
+        keys = [r["item_key"] for r in con.execute(
+            """SELECT DISTINCT l.item_key FROM listing l
+               JOIN tsm t ON t.item_key = l.item_key
+               LEFT JOIN item i ON i.item_key = l.item_key
+               WHERE i.item_key IS NULL AND COALESCE(t.sale_avg, t.market, 0) >= ?""", (min_sale,))]
+    if not keys:
+        return
+    log.info("Hole Metadaten für %d Items ...", len(keys))
+    done = 0
+    with ThreadPoolExecutor(8) as ex:
+        batch = []
+        for row in ex.map(lambda k: fetch_item_meta(bz, k), keys):
+            if row:
+                batch.append(row)
+            if len(batch) >= 200:
+                _store_meta(batch)
+                done += len(batch)
+                batch = []
+        _store_meta(batch)
+        done += len(batch)
+    log.info("Metadaten: %d Items gespeichert", done)
+
+
+def _store_meta(rows):
+    if not rows:
+        return
+    with db() as con:
+        con.executemany("""INSERT OR REPLACE INTO item (item_key, name, quality, class_id, class_name, subclass_name,
+                           binding, level, icon, fetched_at, ok) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", rows)
+
+
+# --------------------------------------------------------------------------
+# TSM-API (Regionsdaten: Verkaufs-Ø, Verkaufsrate, Verkäufe/Tag)
+# --------------------------------------------------------------------------
+def tsm_token(api_key):
+    r = requests.post("https://auth.tradeskillmaster.com/oauth2/token", json={
+        "client_id": TSM_CLIENT_ID, "grant_type": "api_token",
+        "scope": "app:realm-api app:pricing-api", "token": api_key}, timeout=30)
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+
+def _first(d, *names):
+    for n in names:
+        if d.get(n) is not None:
+            return d[n]
+    return None
+
+
+def refresh_tsm(api_key):
+    token = tsm_token(api_key)
+    h = {"Authorization": f"Bearer {token}"}
+    r = requests.get("https://realm-api.tradeskillmaster.com/regions", headers=h, timeout=60)
+    r.raise_for_status()
+    regions = r.json()
+    regions = regions.get("items", regions) if isinstance(regions, dict) else regions
+    region_id = None
+    for reg in regions:
+        prefix = (reg.get("regionPrefix") or reg.get("prefix") or "").lower()
+        version = (reg.get("gameVersion") or "").lower()
+        if prefix == REGION and version in ("retail", ""):
+            region_id = reg.get("regionId") or reg.get("id")
+            break
+    if region_id is None:
+        raise RuntimeError(f"TSM-Region '{REGION}' nicht gefunden: {regions[:5]}")
+    r = requests.get(f"https://pricing-api.tradeskillmaster.com/region/{region_id}", headers=h, timeout=300)
+    r.raise_for_status()
+    data = r.json()
+    data = data.get("items", data) if isinstance(data, dict) else data
+    now = int(time.time())
+    rows = []
+    for e in data:
+        species = _first(e, "petSpeciesId", "petSpeciesID")
+        item_id = _first(e, "itemId", "itemID")
+        if species:
+            key = f"p:{species}"
+        elif item_id:
+            key = f"i:{item_id}"
+        else:
+            continue
+        rows.append((key, _first(e, "marketValue"), _first(e, "historical"), _first(e, "avgSalePrice"),
+                     _first(e, "saleRate"), _first(e, "soldPerDay"), now))
+    with db() as con:
+        con.executemany("""INSERT OR REPLACE INTO tsm (item_key, market, historical, sale_avg, sale_rate,
+                           sold_per_day, updated) VALUES (?, ?, ?, ?, ?, ?, ?)""", rows)
+        meta_set(con, "tsm_updated", now)
+    log.info("TSM: %d Einträge für Region %s (%s)", len(rows), REGION, region_id)
+
+
+# --------------------------------------------------------------------------
+# Ablauf
+# --------------------------------------------------------------------------
+class Collector:
+    def __init__(self):
+        self.bz = Blizzard(os.environ["BLIZZARD_CLIENT_ID"], os.environ["BLIZZARD_CLIENT_SECRET"])
+        self.tsm_key = os.environ.get("TSM_API_KEY", "")
+        self.wake = threading.Event()
+        self.running = False
+        self.last_error = None
+
+    def run_once(self):
+        self.running = True
+        try:
+            with db() as con:
+                realms_updated = int(meta_get(con, "realms_updated", 0))
+                tsm_updated = int(meta_get(con, "tsm_updated", 0))
+            if time.time() - realms_updated > 86400:
+                refresh_realms(self.bz)
+            if self.tsm_key and time.time() - tsm_updated > TSM_HOURS * 3600:
+                try:
+                    refresh_tsm(self.tsm_key)
+                except Exception as e:  # TSM darf den Scan nicht blockieren
+                    log.exception("TSM-Abruf fehlgeschlagen: %s", e)
+                    self.last_error = f"TSM: {e}"
+            for cr in tracked_cr_ids():
+                try:
+                    fetch_auctions(self.bz, cr)
+                except Exception as e:
+                    log.exception("Auktionen Realm-Gruppe %d: %s", cr, e)
+                    self.last_error = f"Auktionen {cr}: {e}"
+            fill_item_meta(self.bz)
+            with db() as con:
+                meta_set(con, "last_run", int(time.time()))
+        finally:
+            self.running = False
+
+    def loop(self):
+        while True:
+            try:
+                self.run_once()
+            except Exception as e:
+                log.exception("Lauf fehlgeschlagen: %s", e)
+                self.last_error = str(e)
+            self.wake.wait(SCAN_MINUTES * 60)
+            self.wake.clear()
+
+    def start(self):
+        threading.Thread(target=self.loop, daemon=True).start()
