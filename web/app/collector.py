@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS item (item_key TEXT PRIMARY KEY, name TEXT, quality T
 CREATE TABLE IF NOT EXISTS tsm (item_key TEXT PRIMARY KEY, market INTEGER, historical INTEGER, sale_avg INTEGER,
                                 sale_rate REAL, sold_per_day REAL, updated INTEGER);
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS decor (item_key TEXT PRIMARY KEY, name TEXT, quality TEXT, subclass_name TEXT,
+                                  stackable INTEGER, updated INTEGER);
 """
 
 
@@ -271,6 +273,45 @@ def _store_meta(rows):
 
 
 # --------------------------------------------------------------------------
+# Alle Deko-Items (Item-Klasse "Behausung") ueber die Blizzard-Suche
+# --------------------------------------------------------------------------
+DECOR_CLASS_ID = int(os.environ.get("DECOR_CLASS_ID", "20"))
+
+
+def _loc(v):
+    if isinstance(v, dict):
+        return v.get(LOCALE) or v.get("en_US") or next(iter(v.values()), None)
+    return v
+
+
+def refresh_decor(bz):
+    rows, page, pages = [], 1, 1
+    now = int(time.time())
+    while page <= pages:
+        data, _ = bz.get(f"/data/wow/search/item?item_class.id={DECOR_CLASS_ID}&orderby=id&_pageSize=1000&_page={page}",
+                         "static")
+        if not data:
+            break
+        pages = data.get("pageCount") or 1
+        for res in data.get("results", []):
+            d = res.get("data") or {}
+            if not d.get("id"):
+                continue
+            rows.append((f"i:{d['id']}", _loc(d.get("name")), (d.get("quality") or {}).get("type"),
+                         _loc((d.get("item_subclass") or {}).get("name")),
+                         1 if d.get("is_stackable") else 0, now))
+        page += 1
+    if not rows:
+        log.warning("Deko-Suche lieferte keine Items (Klasse %s)", DECOR_CLASS_ID)
+        return
+    with db() as con:
+        con.execute("DELETE FROM decor")
+        con.executemany("INSERT OR REPLACE INTO decor VALUES (?, ?, ?, ?, ?, ?)", rows)
+        meta_set(con, "decor_updated", now)
+    log.info("Deko: %d Items (%d Seiten)", len(rows), pages)
+
+
+# --------------------------------------------------------------------------
 # TSM-API (Regionsdaten: Verkaufs-Ø, Verkaufsrate, Verkäufe/Tag)
 # --------------------------------------------------------------------------
 def tsm_token(api_key):
@@ -347,6 +388,14 @@ class Collector:
                 tsm_updated = int(meta_get(con, "tsm_updated", 0))
             if time.time() - realms_updated > 86400:
                 refresh_realms(self.bz)
+            with db() as con:
+                decor_updated = int(meta_get(con, "decor_updated", 0))
+            if time.time() - decor_updated > 86400:
+                try:
+                    refresh_decor(self.bz)
+                except Exception as e:
+                    log.exception("Deko-Liste: %s", e)
+                    self.last_error = f"Deko: {e}"
             if self.tsm_key and time.time() - tsm_updated > TSM_HOURS * 3600:
                 try:
                     refresh_tsm(self.tsm_key)

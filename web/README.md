@@ -20,3 +20,4 @@ und im Tab "Status".
 - `TSM_HOURS`: Abstand der TSM-Abrufe
 
 Daten liegen in `./data/enyconomy.db` (SQLite). Löschen = alles neu holen.
+- `DECOR_CLASS_ID`: Item-Klasse für Deko (Standard 20 = Behausung)

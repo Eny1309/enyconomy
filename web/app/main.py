@@ -34,7 +34,7 @@ _cache = {"stamp": None}
 
 def load():
     with C.db() as con:
-        stamp = (C.meta_get(con, "last_run"), C.meta_get(con, "tsm_updated"),
+        stamp = (C.meta_get(con, "last_run"), C.meta_get(con, "tsm_updated"), C.meta_get(con, "decor_updated"),
                  con.execute("SELECT COUNT(*) FROM item").fetchone()[0])
         if _cache["stamp"] == stamp:
             return _cache
@@ -49,7 +49,9 @@ def load():
         tsm = {r["item_key"]: dict(r) for r in con.execute("SELECT * FROM tsm")}
         items = {r["item_key"]: dict(r) for r in con.execute("SELECT * FROM item")}
         snaps = {r["cr_id"]: dict(r) for r in con.execute("SELECT * FROM snapshot")}
-    _cache.update(stamp=stamp, crs=crs, names=names, listings=listings, tsm=tsm, items=items, snaps=snaps)
+        decor = {r["item_key"]: dict(r) for r in con.execute("SELECT * FROM decor")}
+    _cache.update(stamp=stamp, crs=crs, names=names, listings=listings, tsm=tsm, items=items, snaps=snaps,
+                  decor=decor)
     return _cache
 
 
@@ -106,7 +108,7 @@ def status():
     with C.db() as con:
         tsm_updated = C.meta_get(con, "tsm_updated")
         last_run = C.meta_get(con, "last_run")
-    return {"realms": realms, "tsm_updated": tsm_updated, "last_run": last_run,
+    return {"realms": realms, "tsm_updated": tsm_updated, "last_run": last_run, "decor_items": len(d["decor"]),
             "running": bool(col and col.running), "last_error": col.last_error if col else None,
             "tsm_items": len(d["tsm"]), "items_meta": len(d["items"]),
             "scan_minutes": C.SCAN_MINUTES, "now": int(time.time())}
@@ -222,6 +224,56 @@ def deals(min_pct: float = 25, min_profit: float = 50, min_rate: float = 0.02, m
                      market=t.get("market"), pct=round((usual / price - 1) * 100, 1), profit=int(profit),
                      sale_rate=t.get("sale_rate"), sold_per_day=t.get("sold_per_day"))
             rows.append(r)
+    return page(rows, sort, desc, offset, limit)
+
+
+@app.get("/api/decor-missing")
+def decor_missing(min_sale: float = 300, min_rate: float = 0, min_spd: float = 0, realm: int = 0,
+                  all_missing: bool = False, q: str = "",
+                  sort: str = "score", desc: bool = True, offset: int = 0, limit: int = Query(50, le=500)):
+    """Deko, die auf deinen Realms fehlt - mit Region-Nachfrage aus TSM."""
+    d = load()
+    ql = q.strip().lower()
+    crs = d["crs"]
+    rows = []
+    for key, dec in d["decor"].items():
+        if dec.get("stackable"):
+            continue  # Commodities gibt es regionsweit, nicht pro Realm
+        t = d["tsm"].get(key)
+        if not t or not t.get("sale_avg") or t["sale_avg"] < min_sale * 10000:
+            continue
+        if (t.get("sale_rate") or 0) < min_rate or (t.get("sold_per_day") or 0) < min_spd:
+            continue
+        meta = d["items"].get(key) or {}
+        if meta.get("binding") == "ON_ACQUIRE":
+            continue
+        name = meta.get("name") or dec.get("name") or key
+        if ql and ql not in name.lower():
+            continue
+        per = d["listings"].get(key, {})
+        missing = [cr for cr in crs if cr not in per]
+        if realm:
+            if realm not in missing:
+                continue
+        elif all_missing:
+            if len(missing) != len(crs):
+                continue
+        elif not missing:
+            continue
+        cheapest = min(((v[0], cr) for cr, v in per.items() if cr in crs), default=None)
+        usual = t["sale_avg"]
+        r = item_info(d, key)
+        r.update(name=name, quality=meta.get("quality") or dec.get("quality"),
+                 subclass=meta.get("subclass_name") or dec.get("subclass_name"),
+                 missing=", ".join(realm_label(d, cr) for cr in missing), missing_n=len(missing),
+                 present_n=len(crs) - len(missing),
+                 cheapest=cheapest[0] if cheapest else None,
+                 cheapest_realm=realm_label(d, cheapest[1]) if cheapest else None,
+                 usual=usual, market=t.get("market"),
+                 sale_rate=t.get("sale_rate"), sold_per_day=t.get("sold_per_day"),
+                 score=int((t.get("sold_per_day") or 0) * usual),
+                 flip=int(usual * AH_CUT - cheapest[0]) if cheapest else None)
+        rows.append(r)
     return page(rows, sort, desc, offset, limit)
 
 

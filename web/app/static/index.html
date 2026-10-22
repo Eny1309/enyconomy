@@ -77,6 +77,7 @@ tr:hover td { background: #161a24; }
 <nav>
   <button data-tab="flips" class="on">Flips</button>
   <button data-tab="deals">Deals</button>
+  <button data-tab="decor">Deko fehlt</button>
   <button data-tab="status">Status</button>
 </nav>
 <main>
@@ -119,10 +120,30 @@ const FILTERS = {
     { k: "category", label: "Kategorie enthält", type: "text" },
     { hint: "Günstig im Vergleich zum Region-Verkaufs-Ø - kaufen und auf demselben Realm wieder einstellen." },
   ],
+  decor: [
+    { k: "q", label: "Deko suchen", type: "text" },
+    { row: [{ k: "min_sale", label: "Min. Verkaufs-Ø (g)", type: "number", v: 300 },
+            { k: "min_spd", label: "Min. /Tag", type: "number", v: 0, step: 0.1 }] },
+    { k: "min_rate", label: "Min. Verkaufsrate", type: "number", v: 0, step: 0.01 },
+    { k: "realm", label: "Fehlt auf", type: "realm" },
+    { k: "all_missing", label: "Nur Deko, die auf allen Realms fehlt", type: "check", v: false },
+    { hint: "Alle Deko-Items aus der Blizzard-Suche, die auf mindestens einem deiner Realms nicht im AH liegen. Nachfrage = TSM-Regionsdaten. Flip = auf dem günstigsten Realm kaufen und dort verkaufen, wo sie fehlt." },
+  ],
   status: [],
 };
 
 const COLS = {
+  decor: [
+    { k: "name", t: "Deko", f: itemCell },
+    { k: "quality", t: "Qualität", f: r => `<span class="q-${r.quality}">${QUAL[r.quality] || "-"}</span>` },
+    { k: "missing", t: "Fehlt auf", f: r => `<span class="o" title="${esc(r.missing)}">${r.missing_n === realms.length ? "überall" : esc(r.missing)}</span>` },
+    { k: "cheapest", t: "Günstigst woanders", num: 1, f: r => r.cheapest ? `${gold(r.cheapest)} <span class="sub">${esc(r.cheapest_realm)}</span>` : "-" },
+    { k: "usual", t: "Verkaufs-Ø", num: 1, f: r => gold(r.usual) },
+    { k: "sale_rate", t: "Rate", num: 1, f: r => fix(r.sale_rate, 3) },
+    { k: "sold_per_day", t: "/Tag", num: 1, f: r => fix(r.sold_per_day, 2) },
+    { k: "score", t: "Nachfrage/Tag", num: 1, f: r => gold(r.score) },
+    { k: "flip", t: "Flip-Gewinn", num: 1, f: r => r.flip == null ? "-" : `<span class="${r.flip > 0 ? "g" : "r"}">${gold(r.flip)}</span>` },
+  ],
   flips: [
     { k: "name", t: "Item", f: itemCell },
     { k: "quality", t: "Qualität", f: r => `<span class="q-${r.quality}">${QUAL[r.quality] || "-"}</span>` },
@@ -215,8 +236,9 @@ function buildFilters() {
 async function load() {
   if (tab === "status") return loadStatus();
   const p = new URLSearchParams({ ...readFilters(), sort: state.sort, desc: state.desc, offset: state.offset, limit: state.limit });
+  const endpoint = tab === "decor" ? "decor-missing" : tab;
   $("#content").innerHTML = `<div class="empty">Rechne ...</div>`;
-  const res = await fetch(`/api/${tab}?` + p);
+  const res = await fetch(`/api/${endpoint}?` + p);
   const data = await res.json();
   render(data);
 }
@@ -248,6 +270,7 @@ function render(data) {
     <button id="next" ${cur >= pages ? "disabled" : ""}>Weiter</button>`;
   $("#prev").onclick = () => { state.offset -= state.limit; load(); };
   $("#next").onclick = () => { state.offset += state.limit; load(); };
+  if (tab === "decor") { $("#totals").innerHTML = ""; return; }
   $("#totals").innerHTML = `<div><small>Einsatz gesamt</small><b>${gold(data.sum_buy)}</b></div>
     <div><small>Erwarteter Erlös (nach Gebühr)</small><b style="color:var(--accent)">${gold(data.sum_sell)}</b></div>
     <div><small>Gewinn gesamt</small><b class="g">${gold(data.sum_profit)}</b></div>`;
@@ -277,7 +300,8 @@ async function loadStatus() {
     <div class="card"><h3>Letzter Lauf</h3>vor ${ago(+s.last_run)} ${s.running ? '· <span class="o">läuft gerade</span>' : ""}<br>
       <span class="hint">Automatisch alle ${s.scan_minutes} min</span></div>
     <div class="card"><h3>TSM-Daten</h3>vor ${ago(+s.tsm_updated)} · ${s.tsm_items.toLocaleString("de-DE")} Items</div>
-    <div class="card"><h3>Item-Infos</h3>${s.items_meta.toLocaleString("de-DE")} Items mit Namen</div>
+    <div class="card"><h3>Item-Infos</h3>${s.items_meta.toLocaleString("de-DE")} Items mit Namen<br>
+      <span class="hint">${(s.decor_items || 0).toLocaleString("de-DE")} Deko-Items bekannt</span></div>
     ${s.last_error ? `<div class="card"><h3 class="r">Letzter Fehler</h3><span class="hint">${esc(s.last_error)}</span></div>` : ""}
     ${s.realms.map(r => `<div class="card"><h3>${esc(r.name)}</h3>Snapshot vor ${ago(r.fetched_at)}<br>
       <span class="hint">${(r.auctions || 0).toLocaleString("de-DE")} Auktionen · ${(r.items || 0).toLocaleString("de-DE")} Items</span></div>`).join("")}
@@ -295,7 +319,7 @@ async function header() {
 
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
-  tab = b.dataset.tab; state = { offset: 0, limit: 50, sort: "profit", desc: true };
+  tab = b.dataset.tab; state = { offset: 0, limit: 50, sort: tab === "decor" ? "score" : "profit", desc: true };
   buildFilters(); load();
 });
 $("#scanBtn").onclick = async () => { await fetch("/api/scan", { method: "POST" }); toast("Scan gestartet"); setTimeout(header, 1500); };
