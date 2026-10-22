@@ -145,7 +145,7 @@ end
 ---------------------------------------------------------------------------
 local MODE_ORDER = { "gaps", "deals", "craft", "realms", "shop" }
 local win
-local Refresh, ApplyFilter, StartScan, SelectTab, MakeAuctionatorList
+local Refresh, ApplyFilter, StartScan, SelectTab, MakeAuctionatorList, ShowTsmSearch
 
 local MODES = {
     gaps = {
@@ -231,7 +231,9 @@ local MODES = {
         },
         filters = {
             { key = "shopMissing", label = "Nur fehlende", type = "check" },
-            { key = "_auct", label = "Auktionator-Liste erstellen", type = "button", w = 190,
+            { key = "_tsm", label = "TSM-Suche", type = "button", w = 110,
+              onClick = function() ShowTsmSearch() end },
+            { key = "_auct", label = "Auktionator-Liste", type = "button", w = 130,
               onClick = function() MakeAuctionatorList() end },
         },
         hint = "Bedarf = alle Rezepte der TSM-Warteschlange. Vorhanden = alle Chars des Realms + Kriegsmeuten-Bank, einmal gezählt.",
@@ -1040,6 +1042,37 @@ MakeAuctionatorList = function()
     else
         SetStatus("Auktionator-Fehler: " .. tostring(err))
     end
+end
+
+-- Suchstring fuer die TSM-Shopping-Suche: Name/exact/xMenge;Name/exact/xMenge
+StaticPopupDialogs["ENYCONOMY_COPY"] = {
+    text = "Mit Strg+C kopieren und in TSM -> Shopping in die Suche einfügen:",
+    button1 = OKAY,
+    hasEditBox = true,
+    editBoxWidth = 420,
+    maxLetters = 0,
+    OnShow = function(self, data)
+        local eb = self.editBox or self.EditBox
+        eb:SetText(data or "")
+        eb:HighlightText()
+        eb:SetFocus()
+    end,
+    EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
+    EditBoxOnEnterPressed = function(self) self:GetParent():Hide() end,
+    timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+}
+
+ShowTsmSearch = function()
+    local list = BuildShopping()
+    if not list then return SetStatus("Keine Warteschlange - nichts zu suchen.") end
+    local parts = {}
+    for _, r in ipairs(list) do
+        if r.missing > 0 and r.name and not r.name:match("^Item %d+$") then
+            parts[#parts + 1] = string.format("%s/exact/x%d", r.name, r.missing)
+        end
+    end
+    if #parts == 0 then return SetStatus("Es fehlt nichts - alles vorhanden.") end
+    StaticPopup_Show("ENYCONOMY_COPY", nil, nil, table.concat(parts, ";"))
 end
 
 local function OpenWindow(mode)

@@ -2,7 +2,7 @@
 ## Title: Enyconomy
 ## Notes: Lücken, Deals, Herstellen, Realm-Vergleich und Einkauf - AH-Vollscan + TSM-Daten
 ## Author: Eny
-## Version: 0.9
+## Version: 0.9.1
 ## OptionalDeps: TradeSkillMaster, Auctionator
 ## SavedVariables: EnyconomyDB
 
