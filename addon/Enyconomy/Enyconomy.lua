@@ -24,6 +24,7 @@ local defaults = {
     craftGroup = "", craftSold = 0, craftEmpty = true,  -- Herstellen
     realmPct = 30, realmSold = 0.1, realmProfit = 50,   -- Realms
     realmOwned = false,
+    shopMissing = true,                                 -- Einkauf
     search = "",
 }
 
@@ -142,9 +143,9 @@ end
 ---------------------------------------------------------------------------
 -- Tabs: Spalten und Filter
 ---------------------------------------------------------------------------
-local MODE_ORDER = { "gaps", "deals", "craft", "realms" }
+local MODE_ORDER = { "gaps", "deals", "craft", "realms", "shop" }
 local win
-local Refresh, ApplyFilter, StartScan, SelectTab
+local Refresh, ApplyFilter, StartScan, SelectTab, MakeAuctionatorList
 
 local MODES = {
     gaps = {
@@ -218,6 +219,23 @@ local MODES = {
         },
         hint = "",
     },
+    shop = {
+        label = "Einkauf", default = "cost", needsScan = false,
+        cols = {
+            { key = "name",    title = "Material",   w = 230 },
+            { key = "need",    title = "Bedarf",     w = 55, fmt = int },
+            { key = "have",    title = "Vorhanden",  w = 65, fmt = int },
+            { key = "missing", title = "Fehlt",      w = 55, fmt = stock },
+            { key = "price",   title = "Preis",      w = 75, fmt = gold },
+            { key = "cost",    title = "Kosten",     w = 85, fmt = gold },
+        },
+        filters = {
+            { key = "shopMissing", label = "Nur fehlende", type = "check" },
+            { key = "_auct", label = "Auktionator-Liste erstellen", type = "button", w = 190,
+              onClick = function() MakeAuctionatorList() end },
+        },
+        hint = "Bedarf = alle Rezepte der TSM-Warteschlange. Vorhanden = alle Chars des Realms + Kriegsmeuten-Bank, einmal gezählt.",
+    },
 }
 
 -- Gespeicherte Realm-Scans ausser dem aktuellen Realm
@@ -280,6 +298,103 @@ local function Age(ts)
     if d < 3600 then return string.format("%dmin", math.floor(d / 60)) end
     if d < 86400 then return string.format("%dh", math.floor(d / 3600)) end
     return string.format("%dT", math.floor(d / 86400))
+end
+
+-- Einkaufsliste aus der TSM-Warteschlange aller Chars (Bestand nur einmal gezaehlt)
+local function ItemIdOf(key)
+    local id = type(key) == "string" and key:match("^i:(%d+)")
+    return id and tonumber(id)
+end
+
+local function BuildShopping()
+    local db = _G.TradeSkillMasterDB
+    if type(db) ~= "table" then return nil, "TSM-Daten nicht gefunden." end
+    local fr = (UnitFactionGroup("player") or "?") .. " - " .. GetRealmName()
+    local queue = db["f@" .. fr .. "@internalData@craftingQueue"]
+    local crafts = db["f@" .. fr .. "@internalData@crafts"]
+    if type(queue) ~= "table" or type(crafts) ~= "table" then
+        return nil, "Keine TSM-Warteschlange für " .. fr .. " gefunden."
+    end
+
+    -- Bedarf: [Gruppe] = { ids = {...}, need = n }
+    local entries, nRecipes, nCrafts, unknown = {}, 0, 0, 0
+    for craftString, q in pairs(queue) do
+        local n = type(q) == "number" and q
+            or (type(q) == "table" and (q.num or q.quantity or q.count or q[1])) or 0
+        local craft = crafts[craftString]
+        if n > 0 and not craft then unknown = unknown + 1 end
+        if n > 0 and craft and type(craft.mats) == "table" then
+            nRecipes, nCrafts = nRecipes + 1, nCrafts + n
+            for matKey, qty in pairs(craft.mats) do
+                local ids
+                if matKey:sub(1, 2) == "i:" then
+                    local id = ItemIdOf(matKey)
+                    if id then ids = { id } end
+                elseif matKey:sub(1, 2) == "q:" then
+                    -- Reagenz mit Qualitaetsstufen: jede Stufe zaehlt
+                    ids = {}
+                    for id in (matKey:match("^q:%d+:(.+)$") or ""):gmatch("%d+") do ids[#ids + 1] = tonumber(id) end
+                end
+                -- "o:" (optional) und "f:" (Veredelung) zaehlen nicht zum Pflichtbedarf
+                if ids and #ids > 0 then
+                    local gk = table.concat(ids, ",")
+                    local e = entries[gk]
+                    if not e then e = { ids = ids, need = 0 }; entries[gk] = e end
+                    e.need = e.need + qty * n
+                end
+            end
+        end
+    end
+    if nRecipes == 0 then
+        return nil, "Die TSM-Warteschlange ist leer (oder TSM hat sie noch nicht gespeichert - dann /reload)."
+    end
+
+    -- Bestand: alle Chars dieses Realms (Taschen, Bank, Reagenzienbank, Post) + Kriegsmeuten-Bank
+    local have = {}
+    local function add(tbl)
+        if type(tbl) ~= "table" then return end
+        for k, v in pairs(tbl) do
+            local id = ItemIdOf(k)
+            if id and type(v) == "number" then have[id] = (have[id] or 0) + v end
+        end
+    end
+    local suffix = " - " .. fr
+    for key, val in pairs(db) do
+        if type(key) == "string" and key:sub(1, 2) == "s@" then
+            local who, what = key:match("^s@(.-)@internalData@(%a+)$")
+            if who and who:sub(-#suffix) == suffix and (what == "bagQuantity" or what == "bankQuantity"
+               or what == "reagentBankQuantity" or what == "mailQuantity") then
+                add(val)
+            end
+        end
+    end
+    add(db["g@ @internalData@warbankQuantity"])
+
+    local list, totalCost, missingItems = {}, 0, 0
+    for _, e in pairs(entries) do
+        local h = 0
+        for _, id in ipairs(e.ids) do h = h + (have[id] or 0) end
+        local id = e.ids[1]
+        local name, link = C_Item.GetItemInfo(id)
+        if not name then Item:CreateFromItemID(id):ContinueOnItemLoad(function()
+            if win and win:IsShown() and cfg().mode == "shop" then C_Timer.After(0.3, ApplyFilter) end
+        end) end
+        local missing = math.max(0, e.need - h)
+        local price = tsm("first(DBMinBuyout, DBMarket, DBRegionMarketAvg)", id)
+        local cost = price and missing * price or nil
+        if missing > 0 then
+            missingItems = missingItems + 1
+            totalCost = totalCost + (cost or 0)
+        end
+        list[#list + 1] = {
+            id = id, ids = e.ids, name = name or ("Item " .. id), link = link,
+            need = e.need, have = h, missing = missing, price = price, cost = cost,
+        }
+    end
+    local info = string.format("%d Rezepte, %d Herstellungen | %d Materialien fehlen, ca. %s%s",
+        nRecipes, nCrafts, missingItems, gold(totalCost),
+        unknown > 0 and string.format(" | %d Rezepte ohne Materialdaten", unknown) or "")
+    return list, info
 end
 
 -- Bester Verkaufs-Realm: hoechster Mindestpreis; fehlt das Item dort, gilt der Region-Verkaufs-Ø (geschaetzt)
@@ -362,7 +477,15 @@ local function BuildFilterPanel(mode)
         label:SetPoint("TOPLEFT", x, 0)
         label:SetText(flt.label)
         local w
-        if flt.type == "realm" then
+        if flt.type == "button" then
+            label:SetText("")
+            w = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
+            w:SetSize(flt.w, 22)
+            w:SetPoint("TOPLEFT", x, -12)
+            w:SetText(flt.label)
+            w:SetScript("OnClick", flt.onClick)
+            x = x + flt.w + 12
+        elseif flt.type == "realm" then
             -- Knopf, der durch die gescannten Realms blaettert
             w = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
             w:SetSize(flt.w, 20)
@@ -403,7 +526,9 @@ local function LoadFilterValues(mode)
     local c = cfg()
     for _, w in ipairs(win.panels[mode].widgets) do
         local v = c[w.flt.key]
-        if w.flt.type == "realm" then
+        if w.flt.type == "button" then
+            -- nichts zu laden
+        elseif w.flt.type == "realm" then
             local list = OtherRealms()
             local valid = false
             for _, name in ipairs(list) do if name == v then valid = true end end
@@ -418,7 +543,7 @@ local function ReadFilterValues(mode)
     local c = cfg()
     for _, w in ipairs(win.panels[mode].widgets) do
         local key = w.flt.key
-        if w.flt.type == "realm" then
+        if w.flt.type == "realm" or w.flt.type == "button" then
             -- wird per Klick gesetzt
         elseif w.flt.type == "check" then
             c[key] = w:GetChecked() and true or false
@@ -489,8 +614,8 @@ local function CreateWindow()
     win.tabs = {}
     for i, mode in ipairs(MODE_ORDER) do
         local b = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
-        b:SetSize(105, 22)
-        b:SetPoint("TOPLEFT", 12 + (i - 1) * 108, -28)
+        b:SetSize(90, 22)
+        b:SetPoint("TOPLEFT", 12 + (i - 1) * 92, -28)
         b:SetText(MODES[mode].label)
         b:SetScript("OnClick", function() SelectTab(mode) end)
         b.mode = mode
@@ -737,6 +862,19 @@ ApplyFilter = function()
         return
     end
 
+    if mode == "shop" then
+        local list, info = BuildShopping()
+        if not list then
+            Refresh()
+            return SetStatus(info)
+        end
+        for _, r in ipairs(list) do
+            if not c.shopMissing or r.missing > 0 then shown[#shown + 1] = r end
+        end
+        Refresh()
+        return SetStatus(info)
+    end
+
     if mode == "realms" then
         local here = GetRealmName()
         local names = {}
@@ -876,6 +1014,32 @@ SelectTab = function(mode)
     win.hint:SetText(MODES[mode].hint or "")
     sortKey, sortDesc = MODES[mode].default, true
     ApplyFilter()
+end
+
+MakeAuctionatorList = function()
+    local list = BuildShopping()
+    if not list then return SetStatus("Keine Warteschlange - nichts zu erstellen.") end
+    if not (Auctionator and Auctionator.API and Auctionator.API.v1 and Auctionator.API.v1.CreateShoppingList) then
+        return SetStatus("Auktionator ist nicht geladen.")
+    end
+    local terms = {}
+    for _, r in ipairs(list) do
+        if r.missing > 0 and r.name and not r.name:match("^Item %d+$") then
+            local ok, term = pcall(Auctionator.API.v1.ConvertToSearchString, "Enyconomy",
+                { searchString = r.name, isExact = true, quantity = r.missing })
+            if not ok or not term then
+                term = string.format('"%s";;0;0;0;0;0;0;0;0;;#;;%d', r.name, r.missing)
+            end
+            terms[#terms + 1] = term
+        end
+    end
+    if #terms == 0 then return SetStatus("Es fehlt nichts - alles vorhanden.") end
+    local ok, err = pcall(Auctionator.API.v1.CreateShoppingList, "Enyconomy", "Enyconomy Einkauf", terms)
+    if ok then
+        SetStatus(string.format("Auktionator-Liste 'Enyconomy Einkauf' mit %d Einträgen erstellt.", #terms))
+    else
+        SetStatus("Auktionator-Fehler: " .. tostring(err))
+    end
 end
 
 local function OpenWindow(mode)
@@ -1096,6 +1260,8 @@ SlashCmdList.ENYCONOMY = function(msg)
         OpenWindow("craft")
     elseif cmd == "realms" then
         OpenWindow("realms")
+    elseif cmd == "shop" or cmd == "einkauf" then
+        OpenWindow("shop")
     else
         if win and win:IsShown() then win:Hide() else OpenWindow() end
     end
