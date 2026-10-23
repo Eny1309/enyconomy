@@ -77,6 +77,7 @@ tr:hover td { background: #161a24; }
 <nav>
   <button data-tab="search">Suche</button>
   <button data-tab="flips" class="on">Flips</button>
+  <button data-tab="top">Topliste</button>
   <button data-tab="deals">Deals</button>
   <button data-tab="decor">Deko fehlt</button>
   <button data-tab="niches">Nischen</button>
@@ -98,6 +99,13 @@ const QUAL = { POOR: "Schlecht", COMMON: "Gewöhnlich", UNCOMMON: "Selten", RARE
 let tab = "flips", realms = [], state = { offset: 0, limit: 50, sort: "profit", desc: true };
 
 const FILTERS = {
+  top: [
+    { k: "q", label: "Item-Name enthält", type: "text" },
+    { row: [{ k: "min_sale", label: "Min. Verkaufs-Ø (g)", type: "number", v: 10 },
+            { k: "min_spd", label: "Min. /Tag", type: "number", v: 0.1, step: 0.1 }] },
+    { k: "category", label: "Kategorie enthält (z. B. Haustier, Behausung)", type: "text" },
+    { hint: "Nicht stapelbare Items (Ausrüstung, Deko, Haustiere, Rezepte ...) sortiert nach Verkäufen pro Tag in der EU (TSM). Spalten pro Realm = günstigstes Angebot (Anzahl). Spanne = teuerster zu billigstem Realm." },
+  ],
   search: [
     { k: "q", label: "Item-Name (ab 2 Zeichen)", type: "text" },
     { k: "category", label: "Kategorie enthält (z. B. Haustier, Stoff)", type: "text" },
@@ -262,7 +270,7 @@ async function load() {
   if (tab === "status") return loadStatus();
   const p = new URLSearchParams({ ...readFilters(), sort: state.sort, desc: state.desc, offset: state.offset, limit: state.limit });
   const endpoint = tab === "decor" ? "decor-missing" : tab;
-  if (tab === "niches") state.limit = 100;
+  if (tab === "niches" || tab === "top") state.limit = 100;
   $("#content").innerHTML = `<div class="empty">Rechne ...</div>`;
   const res = await fetch(`/api/${endpoint}?` + p);
   const data = await res.json();
@@ -283,8 +291,27 @@ function searchCols() {
   ];
 }
 
+function realmCols() {
+  return realms.map((rm, i) => ({
+    k: "p" + i, t: esc(rm.short || rm.name.split(",")[0]), num: 1,
+    f: r => { const p = r.prices[i]; if (!p || !p.min) return '<span class="o">–</span>';
+      return `<span class="${p.min === r.cheapest && r.listed_n > 1 ? "g" : ""}">${gold(p.min)}</span> <span class="sub">(${p.n})</span>`; } }));
+}
+
+function topCols() {
+  return [
+    { k: "name", t: "Item", f: itemCell },
+    { k: "sold_per_day", t: "/Tag", num: 1, f: r => `<b>${fix(r.sold_per_day, 1)}</b>` },
+    { k: "usual", t: "Verkaufs-Ø", num: 1, f: r => gold(r.usual) },
+    { k: "gold_day", t: "Umsatz/Tag", num: 1, f: r => gold(r.gold_day) },
+    ...realmCols(),
+    { k: "spread", t: "Spanne", num: 1, f: r => r.spread == null ? "-" : `<span class="${r.spread >= 30 ? "g" : ""}">${r.spread} %</span>` },
+  ];
+}
+
 function render(data) {
   if (tab === "search") COLS.search = searchCols();
+  if (tab === "top") COLS.top = topCols();
   const cols = COLS[tab];
   if (!data.rows.length) {
     $("#content").innerHTML = `<div class="empty">${tab === "search" ? "Item-Namen eingeben (mind. 2 Zeichen)." : "Keine Treffer. Filter lockern oder auf den ersten Scan warten (Tab Status)."}</div>`;
@@ -312,7 +339,7 @@ function render(data) {
     <button id="next" ${cur >= pages ? "disabled" : ""}>Weiter</button>`;
   $("#prev").onclick = () => { state.offset -= state.limit; load(); };
   $("#next").onclick = () => { state.offset += state.limit; load(); };
-  if (tab === "decor" || tab === "niches" || tab === "search") { $("#totals").innerHTML = ""; return; }
+  if (["decor", "niches", "search", "top"].includes(tab)) { $("#totals").innerHTML = ""; return; }
   $("#totals").innerHTML = `<div><small>Einsatz gesamt</small><b>${gold(data.sum_buy)}</b></div>
     <div><small>Erwarteter Erlös (nach Gebühr)</small><b style="color:var(--accent)">${gold(data.sum_sell)}</b></div>
     <div><small>Gewinn gesamt</small><b class="g">${gold(data.sum_profit)}</b></div>`;
@@ -369,7 +396,7 @@ async function header() {
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
   tab = b.dataset.tab;
-  state = { offset: 0, limit: 50, sort: tab === "search" ? "name" : (tab === "decor" || tab === "niches") ? "score" : "profit",
+  state = { offset: 0, limit: 50, sort: tab === "search" ? "name" : tab === "top" ? "sold_per_day" : (tab === "decor" || tab === "niches") ? "score" : "profit",
             desc: tab !== "search" };
   buildFilters(); load();
 });

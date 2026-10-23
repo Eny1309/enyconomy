@@ -378,6 +378,48 @@ def search(q: str = "", category: str = "", only_listed: bool = False,
     return page(rows, sort, desc, offset, limit)
 
 
+@app.get("/api/top")
+def top(min_sale: float = 10, min_spd: float = 0.1, category: str = "", q: str = "",
+        sort: str = "sold_per_day", desc: bool = True, offset: int = 0, limit: int = Query(100, le=500)):
+    """Topliste: nicht stapelbare Items mit den meisten Verkäufen pro Tag (TSM, Region),
+    dazu die Preise auf allen eigenen Realms."""
+    d = load()
+    cat, ql = category.strip().lower(), q.strip().lower()
+    cands = {}
+    for key, dec in d["decor"].items():
+        if not dec.get("stackable"):
+            cands[key] = (dec.get("name"), dec.get("quality"), "Behausung", dec.get("subclass_name"), None)
+    for key, meta in d["items"].items():
+        if meta.get("ok"):
+            cands[key] = (meta.get("name"), meta.get("quality"), meta.get("class_name"),
+                          meta.get("subclass_name"), meta.get("binding"))
+    rows = []
+    for key, (name, quality, cls, sub, binding) in cands.items():
+        if binding in ("ON_ACQUIRE", "QUEST"):
+            continue
+        t = d["tsm"].get(key)
+        if not t:
+            continue
+        spd, sale = t.get("sold_per_day") or 0, t.get("sale_avg") or 0
+        if spd < min_spd or sale < min_sale * 10000:
+            continue
+        if cat and cat not in (cls or "").lower() and cat not in (sub or "").lower():
+            continue
+        if ql and ql not in (name or "").lower():
+            continue
+        per = d["listings"].get(key, {})
+        prices = [{"cr": cr, "min": per[cr][0] if cr in per else None, "n": per[cr][2] if cr in per else 0}
+                  for cr in d["crs"]]
+        listed = [p["min"] for p in prices if p["min"]]
+        r = item_info(d, key)
+        r.update(name=name or key, quality=quality, **{"class": cls, "subclass": sub}, prices=prices,
+                 cheapest=min(listed) if listed else None, listed_n=len(listed),
+                 spread=round((max(listed) / min(listed) - 1) * 100) if len(listed) > 1 else None,
+                 usual=sale, sale_rate=t.get("sale_rate"), sold_per_day=spd, gold_day=int(spd * sale))
+        rows.append(r)
+    return page(rows, sort, desc, offset, limit)
+
+
 @app.get("/api/item/{key}")
 def item(key: str):
     """Ein Item auf allen eigenen Realms."""
