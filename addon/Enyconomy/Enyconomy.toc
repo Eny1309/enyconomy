@@ -1,8 +1,8 @@
 ## Interface: 120105
 ## Title: Enyconomy
-## Notes: Lücken, Deals, Herstellen, Realm-Vergleich und Einkauf - AH-Vollscan + TSM-Daten
+## Notes: Herstellen über alle Realms mit Zielmengen + Einkaufs- und Sammelliste
 ## Author: Eny
-## Version: 0.9.1
+## Version: 1.0
 ## OptionalDeps: TradeSkillMaster, Auctionator
 ## SavedVariables: EnyconomyDB
 
