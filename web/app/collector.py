@@ -156,6 +156,11 @@ def tracked_cr_ids():
     ids, missing = set(), []
     for w in want:
         hit = [r["cr_id"] for r in rows if norm(r["name"]) == norm(w) or norm(r["slug"]) == norm(w)]
+        if not hit:  # z. B. "Mithrilorden" -> "Der Mithrilorden"
+            hit = [r["cr_id"] for r in rows if norm(w) in norm(r["name"]) or norm(w) in norm(r["slug"])]
+            if len(set(hit)) > 1:
+                log.warning("Realm '%s' ist mehrdeutig: %s", w,
+                            ", ".join(sorted({r["name"] for r in rows if norm(w) in norm(r["name"])})))
         if hit:
             ids.update(hit)
         else:
