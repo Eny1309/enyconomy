@@ -121,10 +121,22 @@ def scan():
     return {"ok": True}
 
 
+def realm_short(d, cr):
+    """Dein Realm aus REALMS statt der ganzen Realm-Gruppe (z. B. 'Theradras' statt 'Dethecus, ...')."""
+    want = C.tracked_realms()
+    names = d["names"].get(cr, [])
+    if want != "all":
+        for w in want:
+            for n in names:
+                if C.norm(w) == C.norm(n) or C.norm(w) in C.norm(n):
+                    return n
+    return sorted(names)[0] if names else str(cr)
+
+
 @app.get("/api/realms")
 def realms():
     d = load()
-    return [{"cr_id": cr, "name": realm_label(d, cr)} for cr in d["crs"]]
+    return [{"cr_id": cr, "name": realm_label(d, cr), "short": realm_short(d, cr)} for cr in d["crs"]]
 
 
 @app.get("/api/flips")
@@ -327,6 +339,42 @@ def niches(min_sale: float = 50, min_spd: float = 0.01, by_subclass: bool = True
             "missing_pct": round(missing_pct, 1), "score": round(score, 1),
             "examples": ", ".join(n for _, n in g["examples"][:4]),
         })
+    return page(rows, sort, desc, offset, limit)
+
+
+@app.get("/api/search")
+def search(q: str = "", category: str = "", only_listed: bool = False,
+           sort: str = "name", desc: bool = False, offset: int = 0, limit: int = Query(50, le=500)):
+    """Kleines AH: Items nach Namen suchen, Preise auf allen eigenen Realms."""
+    d = load()
+    ql, cat = q.strip().lower(), category.strip().lower()
+    if len(ql) < 2 and not cat:
+        return page([], sort, desc, offset, limit)
+    names = {}
+    for key, dec in d["decor"].items():
+        names[key] = (dec.get("name"), dec.get("quality"), "Behausung", dec.get("subclass_name"))
+    for key, meta in d["items"].items():
+        if meta.get("ok"):
+            names[key] = (meta.get("name"), meta.get("quality"), meta.get("class_name"), meta.get("subclass_name"))
+    rows = []
+    for key, (name, quality, cls, sub) in names.items():
+        if not name or (ql and ql not in name.lower()):
+            continue
+        if cat and cat not in (cls or "").lower() and cat not in (sub or "").lower():
+            continue
+        per = d["listings"].get(key, {})
+        prices = [{"cr": cr, "min": per[cr][0] if cr in per else None, "n": per[cr][2] if cr in per else 0}
+                  for cr in d["crs"]]
+        listed = [p["min"] for p in prices if p["min"]]
+        if only_listed and not listed:
+            continue
+        t = d["tsm"].get(key) or {}
+        r = item_info(d, key)
+        r.update(name=name, quality=quality, **{"class": cls, "subclass": sub}, prices=prices,
+                 cheapest=min(listed) if listed else None, listed_n=len(listed),
+                 usual=t.get("sale_avg"), market=t.get("market"),
+                 sale_rate=t.get("sale_rate"), sold_per_day=t.get("sold_per_day"))
+        rows.append(r)
     return page(rows, sort, desc, offset, limit)
 
 

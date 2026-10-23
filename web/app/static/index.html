@@ -75,6 +75,7 @@ tr:hover td { background: #161a24; }
   <button class="btn" id="scanBtn">Jetzt scannen</button>
 </header>
 <nav>
+  <button data-tab="search">Suche</button>
   <button data-tab="flips" class="on">Flips</button>
   <button data-tab="deals">Deals</button>
   <button data-tab="decor">Deko fehlt</button>
@@ -97,6 +98,12 @@ const QUAL = { POOR: "Schlecht", COMMON: "Gewöhnlich", UNCOMMON: "Selten", RARE
 let tab = "flips", realms = [], state = { offset: 0, limit: 50, sort: "profit", desc: true };
 
 const FILTERS = {
+  search: [
+    { k: "q", label: "Item-Name (ab 2 Zeichen)", type: "text" },
+    { k: "category", label: "Kategorie enthält (z. B. Haustier, Stoff)", type: "text" },
+    { k: "only_listed", label: "Nur was gerade angeboten wird", type: "check", v: false },
+    { hint: "Preise = günstigstes Angebot pro Realm beim letzten Snapshot, Anzahl in Klammern. Grün = billigster Realm. Gesucht wird in allen Items mit Namen (ab ca. 10g Wert) und der kompletten Deko." },
+  ],
   flips: [
     { k: "q", label: "Item suchen", type: "text" },
     { row: [{ k: "min_profit", label: "Min. Gewinn (g)", type: "number", v: 100 },
@@ -234,7 +241,7 @@ function field(f, saved) {
     return `<label class="check"><input type="checkbox" data-k="${f.k}" ${v ? "checked" : ""}> ${f.label}</label>`;
   if (f.type === "realm")
     return `<div><label>${f.label}</label><select data-k="${f.k}"><option value="0">Alle eigenen Realms</option>${
-      realms.map(r => `<option value="${r.cr_id}" ${String(v) === String(r.cr_id) ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></div>`;
+      realms.map(r => `<option value="${r.cr_id}" ${String(v) === String(r.cr_id) ? "selected" : ""}>${esc(r.short || r.name)}</option>`).join("")}</select></div>`;
   return `<div><label>${f.label}</label><input type="${f.type}" data-k="${f.k}" value="${esc(v)}" ${f.step ? `step="${f.step}"` : ""}></div>`;
 }
 
@@ -262,10 +269,25 @@ async function load() {
   render(data);
 }
 
+function searchCols() {
+  return [
+    { k: "name", t: "Item", f: itemCell },
+    { k: "quality", t: "Qualität", f: r => `<span class="q-${r.quality}">${QUAL[r.quality] || "-"}</span>` },
+    ...realms.map((rm, i) => ({
+      k: "p" + i, t: esc(rm.short || rm.name.split(",")[0]), num: 1, nosort: 1,
+      f: r => { const p = r.prices[i]; if (!p || !p.min) return '<span class="sub">–</span>';
+        return `<span class="${p.min === r.cheapest && r.listed_n > 1 ? "g" : ""}">${gold(p.min)}</span> <span class="sub">(${p.n})</span>`; } })),
+    { k: "usual", t: "Verkaufs-Ø", num: 1, f: r => gold(r.usual) },
+    { k: "sale_rate", t: "Rate", num: 1, f: r => fix(r.sale_rate, 3) },
+    { k: "sold_per_day", t: "/Tag", num: 1, f: r => fix(r.sold_per_day, 2) },
+  ];
+}
+
 function render(data) {
+  if (tab === "search") COLS.search = searchCols();
   const cols = COLS[tab];
   if (!data.rows.length) {
-    $("#content").innerHTML = `<div class="empty">Keine Treffer. Filter lockern oder auf den ersten Scan warten (Tab Status).</div>`;
+    $("#content").innerHTML = `<div class="empty">${tab === "search" ? "Item-Namen eingeben (mind. 2 Zeichen)." : "Keine Treffer. Filter lockern oder auf den ersten Scan warten (Tab Status)."}</div>`;
   } else {
     $("#content").innerHTML = `<table><thead><tr>${cols.map(c =>
       `<th data-s="${c.k}" class="${c.num ? "num" : ""} ${state.sort === c.k ? "sorted" : ""}">${c.t}${state.sort === c.k ? (state.desc ? " ▼" : " ▲") : ""}</th>`).join("")}</tr></thead>
@@ -273,6 +295,7 @@ function render(data) {
         `<td class="${c.num ? "num" : ""}">${c.f ? c.f(r) : esc(r[c.k] ?? "-")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     document.querySelectorAll("th[data-s]").forEach(th => th.onclick = () => {
       const k = th.dataset.s;
+      if (/^p\d+$/.test(k)) return;
       if (state.sort === k) state.desc = !state.desc; else { state.sort = k; state.desc = !["name", "buy_realm", "sell_realm", "realm"].includes(k); }
       state.offset = 0; load();
     });
@@ -289,7 +312,7 @@ function render(data) {
     <button id="next" ${cur >= pages ? "disabled" : ""}>Weiter</button>`;
   $("#prev").onclick = () => { state.offset -= state.limit; load(); };
   $("#next").onclick = () => { state.offset += state.limit; load(); };
-  if (tab === "decor" || tab === "niches") { $("#totals").innerHTML = ""; return; }
+  if (tab === "decor" || tab === "niches" || tab === "search") { $("#totals").innerHTML = ""; return; }
   $("#totals").innerHTML = `<div><small>Einsatz gesamt</small><b>${gold(data.sum_buy)}</b></div>
     <div><small>Erwarteter Erlös (nach Gebühr)</small><b style="color:var(--accent)">${gold(data.sum_sell)}</b></div>
     <div><small>Gewinn gesamt</small><b class="g">${gold(data.sum_profit)}</b></div>`;
@@ -345,7 +368,9 @@ async function header() {
 
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
-  tab = b.dataset.tab; state = { offset: 0, limit: 50, sort: (tab === "decor" || tab === "niches") ? "score" : "profit", desc: true };
+  tab = b.dataset.tab;
+  state = { offset: 0, limit: 50, sort: tab === "search" ? "name" : (tab === "decor" || tab === "niches") ? "score" : "profit",
+            desc: tab !== "search" };
   buildFilters(); load();
 });
 $("#scanBtn").onclick = async () => { await fetch("/api/scan", { method: "POST" }); toast("Scan gestartet"); setTimeout(header, 1500); };
