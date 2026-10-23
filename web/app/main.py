@@ -277,6 +277,59 @@ def decor_missing(min_sale: float = 300, min_rate: float = 0, min_spd: float = 0
     return page(rows, sort, desc, offset, limit)
 
 
+@app.get("/api/niches")
+def niches(min_sale: float = 50, min_spd: float = 0.01, by_subclass: bool = True,
+           sort: str = "score", desc: bool = True, offset: int = 0, limit: int = Query(100, le=500)):
+    """Kategorien nach Nachfrage (TSM) und Konkurrenz (Angebote auf deinen Realms)."""
+    d = load()
+    crs = d["crs"] or [0]
+    groups = {}
+    for key, t in d["tsm"].items():
+        meta = d["items"].get(key)
+        if not tradable(meta):
+            continue
+        sale, spd = t.get("sale_avg") or 0, t.get("sold_per_day") or 0
+        if sale < min_sale * 10000 or spd < min_spd:
+            continue
+        cls = meta.get("class_name") or "?"
+        sub = meta.get("subclass_name") or "-"
+        gk = (cls, sub if by_subclass else "")
+        g = groups.get(gk)
+        if not g:
+            g = groups[gk] = {"items": 0, "listed": 0, "auctions": 0, "spd": 0.0, "gold": 0.0,
+                              "missing": 0, "sale_sum": 0.0, "examples": []}
+        per = d["listings"].get(key, {})
+        auctions = sum(per[cr][2] for cr in crs if cr in per)
+        g["items"] += 1
+        g["listed"] += 1 if auctions else 0
+        g["missing"] += sum(1 for cr in crs if cr not in per)
+        g["auctions"] += auctions
+        g["spd"] += spd
+        g["gold"] += spd * sale
+        g["sale_sum"] += sale
+        g["examples"].append((spd * sale, meta.get("name") or key))
+    rows = []
+    n_realms = len(crs)
+    for (cls, sub), g in groups.items():
+        if g["items"] < 3:
+            continue
+        avg_auctions = g["auctions"] / (g["items"] * n_realms)        # Angebote pro Item und Realm
+        supply = g["auctions"] / n_realms / g["spd"] if g["spd"] else None  # Angebot je regionalem Tagesverkauf
+        missing_pct = g["missing"] / (g["items"] * n_realms) * 100
+        gold_day = g["gold"]
+        score = gold_day / (1 + (supply or 0)) / 10000
+        g["examples"].sort(reverse=True)
+        rows.append({
+            "key": f"{cls}|{sub}", "category": cls, "subclass": sub or "-",
+            "items": g["items"], "avg_sale": int(g["sale_sum"] / g["items"]),
+            "spd": round(g["spd"], 2), "gold_day": int(gold_day),
+            "avg_auctions": round(avg_auctions, 2), "supply": round(supply, 2) if supply is not None else None,
+            "missing_pct": round(missing_pct, 1), "score": round(score, 1),
+            "examples": ", ".join(n for _, n in g["examples"][:4]),
+        })
+    return page(rows, sort, desc, offset, limit)
+
+
 @app.get("/api/item/{key}")
 def item(key: str):
     """Ein Item auf allen eigenen Realms."""

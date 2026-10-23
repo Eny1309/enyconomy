@@ -78,6 +78,7 @@ tr:hover td { background: #161a24; }
   <button data-tab="flips" class="on">Flips</button>
   <button data-tab="deals">Deals</button>
   <button data-tab="decor">Deko fehlt</button>
+  <button data-tab="niches">Nischen</button>
   <button data-tab="status">Status</button>
 </nav>
 <main>
@@ -129,10 +130,27 @@ const FILTERS = {
     { k: "all_missing", label: "Nur Deko, die auf allen Realms fehlt", type: "check", v: false },
     { hint: "Alle Deko-Items aus der Blizzard-Suche, die auf mindestens einem deiner Realms nicht im AH liegen. Nachfrage = TSM-Regionsdaten. Flip = auf dem günstigsten Realm kaufen und dort verkaufen, wo sie fehlt." },
   ],
+  niches: [
+    { row: [{ k: "min_sale", label: "Min. Verkaufs-Ø (g)", type: "number", v: 50 },
+            { k: "min_spd", label: "Min. /Tag", type: "number", v: 0.01, step: 0.01 }] },
+    { k: "by_subclass", label: "Nach Unterkategorie aufteilen", type: "check", v: true },
+    { hint: "Nachfrage = Summe aus TSM-Verkäufen/Tag × Verkaufs-Ø (Region). Angebot = Auktionen auf deinen Realms je regionalem Tagesverkauf - je kleiner, desto weniger Konkurrenz. Punkte = Nachfrage geteilt durch Konkurrenz. Klick auf eine Zeile zeigt die Top-Items." },
+  ],
   status: [],
 };
 
 const COLS = {
+  niches: [
+    { k: "category", t: "Kategorie", f: r => `<b>${esc(r.category)}</b><div class="sub">${esc(r.subclass)}</div>` },
+    { k: "items", t: "Items", num: 1 },
+    { k: "avg_sale", t: "Ø Preis", num: 1, f: r => gold(r.avg_sale) },
+    { k: "spd", t: "Verk./Tag", num: 1, f: r => fix(r.spd, 1) },
+    { k: "gold_day", t: "Nachfrage/Tag", num: 1, f: r => gold(r.gold_day) },
+    { k: "avg_auctions", t: "Angebote je Item", num: 1, f: r => fix(r.avg_auctions, 2) },
+    { k: "supply", t: "Angebot/Nachfrage", num: 1, f: r => `<span class="${r.supply < 1 ? "g" : r.supply > 5 ? "r" : ""}">${fix(r.supply, 2)}</span>` },
+    { k: "missing_pct", t: "Fehlt %", num: 1, f: r => fix(r.missing_pct, 0) + " %" },
+    { k: "score", t: "Punkte", num: 1, f: r => `<span class="g">${fix(r.score, 0)}</span>` },
+  ],
   decor: [
     { k: "name", t: "Deko", f: itemCell },
     { k: "quality", t: "Qualität", f: r => `<span class="q-${r.quality}">${QUAL[r.quality] || "-"}</span>` },
@@ -237,6 +255,7 @@ async function load() {
   if (tab === "status") return loadStatus();
   const p = new URLSearchParams({ ...readFilters(), sort: state.sort, desc: state.desc, offset: state.offset, limit: state.limit });
   const endpoint = tab === "decor" ? "decor-missing" : tab;
+  if (tab === "niches") state.limit = 100;
   $("#content").innerHTML = `<div class="empty">Rechne ...</div>`;
   const res = await fetch(`/api/${endpoint}?` + p);
   const data = await res.json();
@@ -270,7 +289,7 @@ function render(data) {
     <button id="next" ${cur >= pages ? "disabled" : ""}>Weiter</button>`;
   $("#prev").onclick = () => { state.offset -= state.limit; load(); };
   $("#next").onclick = () => { state.offset += state.limit; load(); };
-  if (tab === "decor") { $("#totals").innerHTML = ""; return; }
+  if (tab === "decor" || tab === "niches") { $("#totals").innerHTML = ""; return; }
   $("#totals").innerHTML = `<div><small>Einsatz gesamt</small><b>${gold(data.sum_buy)}</b></div>
     <div><small>Erwarteter Erlös (nach Gebühr)</small><b style="color:var(--accent)">${gold(data.sum_sell)}</b></div>
     <div><small>Gewinn gesamt</small><b class="g">${gold(data.sum_profit)}</b></div>`;
@@ -279,6 +298,13 @@ function render(data) {
 async function toggleDetail(tr, r) {
   const next = tr.nextElementSibling;
   if (next && next.classList.contains("detail")) { next.remove(); return; }
+  if (tab === "niches") {
+    const row = document.createElement("tr");
+    row.className = "detail";
+    row.innerHTML = `<td colspan="${COLS[tab].length}">Top-Items nach Nachfrage: ${esc(r.examples)}</td>`;
+    tr.after(row);
+    return;
+  }
   const d = await (await fetch(`/api/item/${r.key}`)).json();
   const t = d.tsm || {};
   const row = document.createElement("tr");
@@ -319,7 +345,7 @@ async function header() {
 
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
-  tab = b.dataset.tab; state = { offset: 0, limit: 50, sort: tab === "decor" ? "score" : "profit", desc: true };
+  tab = b.dataset.tab; state = { offset: 0, limit: 50, sort: (tab === "decor" || tab === "niches") ? "score" : "profit", desc: true };
   buildFilters(); load();
 });
 $("#scanBtn").onclick = async () => { await fetch("/api/scan", { method: "POST" }); toast("Scan gestartet"); setTimeout(header, 1500); };
