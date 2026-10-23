@@ -55,9 +55,14 @@ def load():
     return _cache
 
 
-def realm_label(d, cr):
+def realm_full(d, cr):
     n = sorted(d["names"].get(cr, [str(cr)]))
     return ", ".join(n)
+
+
+def realm_label(d, cr):
+    """Kurzname: dein Realm aus REALMS statt der ganzen Realm-Gruppe."""
+    return realm_short(d, cr)
 
 
 def tradable(meta):
@@ -102,7 +107,8 @@ def status():
     realms = []
     for cr in d["crs"]:
         s = d["snaps"].get(cr, {})
-        realms.append({"cr_id": cr, "name": realm_label(d, cr), "fetched_at": s.get("fetched_at"),
+        realms.append({"cr_id": cr, "name": realm_label(d, cr), "group": realm_full(d, cr),
+                       "fetched_at": s.get("fetched_at"),
                        "auctions": s.get("n_auctions"),
                        "items": sum(1 for v in d["listings"].values() if cr in v)})
     with C.db() as con:
@@ -136,7 +142,7 @@ def realm_short(d, cr):
 @app.get("/api/realms")
 def realms():
     d = load()
-    return [{"cr_id": cr, "name": realm_label(d, cr), "short": realm_short(d, cr)} for cr in d["crs"]]
+    return [{"cr_id": cr, "name": realm_full(d, cr), "short": realm_short(d, cr)} for cr in d["crs"]]
 
 
 @app.get("/api/flips")

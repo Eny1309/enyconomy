@@ -379,7 +379,7 @@ async function loadStatus() {
     <div class="card"><h3>Item-Infos</h3>${s.items_meta.toLocaleString("de-DE")} Items mit Namen<br>
       <span class="hint">${(s.decor_items || 0).toLocaleString("de-DE")} Deko-Items bekannt</span></div>
     ${s.last_error ? `<div class="card"><h3 class="r">Letzter Fehler</h3><span class="hint">${esc(s.last_error)}</span></div>` : ""}
-    ${s.realms.map(r => `<div class="card"><h3>${esc(r.name)}</h3>Snapshot vor ${ago(r.fetched_at)}<br>
+    ${s.realms.map(r => `<div class="card"><h3>${esc(r.name)}</h3><span class="hint">${esc(r.group || "")}</span><br>Snapshot vor ${ago(r.fetched_at)}<br>
       <span class="hint">${(r.auctions || 0).toLocaleString("de-DE")} Auktionen · ${(r.items || 0).toLocaleString("de-DE")} Items</span></div>`).join("")}
   </div>`;
 }
