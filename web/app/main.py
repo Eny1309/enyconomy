@@ -426,6 +426,62 @@ def top(min_sale: float = 10, min_spd: float = 0.1, category: str = "", q: str =
     return page(rows, sort, desc, offset, limit)
 
 
+@app.get("/api/sniper")
+def sniper(min_rate: float = 0.1, min_sale: float = 10, max_pct: float = 70, category: str = "", q: str = "",
+           quality: str = "", list_name: str = "Enyconomy Sniper",
+           sort: str = "sale_rate", desc: bool = True, offset: int = 0, limit: int = Query(100, le=500)):
+    """Sniper-Liste für Auktionator/Point Blank Sniper: alle nicht regionsweit gehandelten Items
+    mit ausreichender Verkaufsrate. Höchstpreis = max_pct % des Region-Verkaufs-Ø."""
+    d = load()
+    cat, ql, qual = category.strip().lower(), q.strip().lower(), quality.strip().upper()
+    best = {}
+    for key, t in d["tsm"].items():
+        rate, sale = t.get("sale_rate") or 0, t.get("sale_avg") or 0
+        if rate < min_rate or sale < min_sale * 10000:
+            continue
+        meta = d["items"].get(key) or {}
+        dec = d["decor"].get(key) or {}
+        if not meta.get("ok") and not dec:
+            continue  # ohne Metadaten wissen wir nicht, ob es eine Ware ist
+        stack = meta.get("stackable")
+        if stack is None and dec:
+            stack = dec.get("stackable")
+        if stack is None and key not in d["listings"]:
+            continue  # unbekannt und nie auf einem eigenen Realm gesehen -> eher Ware
+        if stack:
+            continue  # Waren (regionsweit) raus
+        if meta.get("binding") in ("ON_ACQUIRE", "QUEST") or meta.get("class_id") == 12:
+            continue
+        name = meta.get("name") or dec.get("name")
+        if not name:
+            continue
+        cls, sub = meta.get("class_name") or ("Behausung" if dec else None), meta.get("subclass_name") or dec.get("subclass_name")
+        if cat and cat not in (cls or "").lower() and cat not in (sub or "").lower():
+            continue
+        if ql and ql not in name.lower():
+            continue
+        q_ = meta.get("quality") or dec.get("quality")
+        if qual and q_ != qual:
+            continue
+        maxp = int(sale * max_pct / 100 / 10000)  # in Gold, wie Auktionator es erwartet
+        if maxp < 1:
+            continue
+        prev = best.get(name)
+        if prev and prev["usual"] >= sale:
+            continue  # gleicher Name (z. B. mehrere IDs): nur einmal, mit dem höheren Wert
+        r = item_info(d, key)
+        r.update(name=name, quality=q_, **{"class": cls, "subclass": sub}, usual=sale, sale_rate=rate,
+                 sold_per_day=t.get("sold_per_day"), max_gold=maxp)
+        best[name] = r
+    rows = list(best.values())
+    terms = ['"{}";;0;0;0;0;0;0;0;{};;#;;'.format(r["name"].replace('"', ''), r["max_gold"])
+             for r in sorted(rows, key=lambda r: -(r["sale_rate"] or 0))]
+    res = page(rows, sort, desc, offset, limit)
+    res["export"] = (list_name.replace("^", "") or "Enyconomy Sniper") + "^" + "^".join(terms) if terms else ""
+    res["count"] = len(terms)
+    return res
+
+
 @app.get("/api/item/{key}")
 def item(key: str):
     """Ein Item auf allen eigenen Realms."""

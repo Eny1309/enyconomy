@@ -23,6 +23,7 @@ DB_PATH = os.environ.get("DB_PATH", "/data/enyconomy.db")
 SCAN_MINUTES = int(os.environ.get("SCAN_MINUTES", "60"))
 TSM_HOURS = float(os.environ.get("TSM_HOURS", "6"))
 PET_CAGE = 82800
+SNIPER_MIN_RATE = float(os.environ.get("SNIPER_MIN_RATE", "0.05"))
 
 # Öffentliche Client-ID der TSM-API (aus der TSM-API-Doku), dazu dein persönlicher API-Key
 TSM_CLIENT_ID = "c260f00d-1071-409a-992f-dda2e5498536"
@@ -59,6 +60,9 @@ def init_db():
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     with db() as con:
         con.executescript(SCHEMA)
+        cols = [r["name"] for r in con.execute("PRAGMA table_info(item)")]
+        if "stackable" not in cols:
+            con.execute("ALTER TABLE item ADD COLUMN stackable INTEGER")
 
 
 def meta_get(con, k, default=None):
@@ -221,13 +225,13 @@ def fetch_item_meta(bz, key):
         if kind == "p":
             data, _ = bz.get(f"/data/wow/pet/{num}", "static")
             if not data:
-                return (key, None, None, None, None, None, None, None, None, int(time.time()), 0)
+                return (key, None, None, None, None, None, None, None, None, int(time.time()), 0, None)
             icon = data.get("icon")
             return (key, data.get("name"), "PET", 17, "Haustier", None,
-                    None if data.get("is_tradable", True) else "ON_ACQUIRE", None, icon, int(time.time()), 1)
+                    None if data.get("is_tradable", True) else "ON_ACQUIRE", None, icon, int(time.time()), 1, 0)
         data, _ = bz.get(f"/data/wow/item/{num}", "static")
         if not data:
-            return (key, None, None, None, None, None, None, None, None, int(time.time()), 0)
+            return (key, None, None, None, None, None, None, None, None, int(time.time()), 0, None)
         icon = None
         media, _ = bz.get(f"/data/wow/media/item/{num}", "static")
         for asset in (media or {}).get("assets", []):
@@ -237,7 +241,7 @@ def fetch_item_meta(bz, key):
         return (key, data.get("name"), (data.get("quality") or {}).get("type"),
                 (data.get("item_class") or {}).get("id"), (data.get("item_class") or {}).get("name"),
                 (data.get("item_subclass") or {}).get("name"), binding, data.get("level"), icon,
-                int(time.time()), 1)
+                int(time.time()), 1, 1 if data.get("is_stackable") else 0)
     except requests.RequestException as e:
         log.warning("Item %s: %s", key, e)
         return None
@@ -251,6 +255,12 @@ def fill_item_meta(bz, min_sale=100_000):
                JOIN tsm t ON t.item_key = l.item_key
                LEFT JOIN item i ON i.item_key = l.item_key
                WHERE i.item_key IS NULL AND COALESCE(t.sale_avg, t.market, 0) >= ?""", (min_sale,))]
+        # für Sniper-Listen: alle Items mit guter Verkaufsrate, auch wenn sie auf deinen Realms nie angeboten werden
+        keys += [r["item_key"] for r in con.execute(
+            """SELECT t.item_key FROM tsm t LEFT JOIN item i ON i.item_key = t.item_key
+               WHERE i.item_key IS NULL AND COALESCE(t.sale_rate, 0) >= ? AND COALESCE(t.sale_avg, 0) >= ?""",
+            (SNIPER_MIN_RATE, 10_000))]
+        keys = list(dict.fromkeys(keys))
     if not keys:
         return
     log.info("Hole Metadaten für %d Items ...", len(keys))
@@ -274,7 +284,8 @@ def _store_meta(rows):
         return
     with db() as con:
         con.executemany("""INSERT OR REPLACE INTO item (item_key, name, quality, class_id, class_name, subclass_name,
-                           binding, level, icon, fetched_at, ok) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", rows)
+                           binding, level, icon, fetched_at, ok, stackable)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", rows)
 
 
 # --------------------------------------------------------------------------

@@ -21,3 +21,4 @@ und im Tab "Status".
 
 Daten liegen in `./data/enyconomy.db` (SQLite). Löschen = alles neu holen.
 - `DECOR_CLASS_ID`: Item-Klasse für Deko (Standard 20 = Behausung)
+- `SNIPER_MIN_RATE`: ab welcher Verkaufsrate Item-Infos auch für nie gesehene Items geholt werden (Standard 0.05)

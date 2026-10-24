@@ -81,6 +81,7 @@ tr:hover td { background: #161a24; }
   <button data-tab="deals">Deals</button>
   <button data-tab="decor">Deko fehlt</button>
   <button data-tab="niches">Nischen</button>
+  <button data-tab="sniper">Sniper-Liste</button>
   <button data-tab="status">Status</button>
 </nav>
 <main>
@@ -99,6 +100,17 @@ const QUAL = { POOR: "Schlecht", COMMON: "Gewöhnlich", UNCOMMON: "Selten", RARE
 let tab = "flips", realms = [], state = { offset: 0, limit: 50, sort: "profit", desc: true };
 
 const FILTERS = {
+  sniper: [
+    { k: "list_name", label: "Listenname", type: "text", v: "Enyconomy Sniper" },
+    { row: [{ k: "min_rate", label: "Min. Verkaufsrate", type: "number", v: 0.1, step: 0.01 },
+            { k: "min_sale", label: "Min. Verkaufs-Ø (g)", type: "number", v: 10 }] },
+    { k: "max_pct", label: "Höchstpreis = % vom Verkaufs-Ø", type: "number", v: 70 },
+    { k: "category", label: "Kategorie enthält (leer = alle)", type: "text" },
+    { k: "quality", label: "Qualität", type: "select", options: [["", "Alle"], ["POOR", "Schlecht"], ["COMMON", "Gewöhnlich"],
+        ["UNCOMMON", "Selten"], ["RARE", "Rar"], ["EPIC", "Episch"], ["LEGENDARY", "Legendär"], ["PET", "Haustier"]] },
+    { k: "q", label: "Name enthält", type: "text" },
+    { hint: "Alle Items, die pro Realm gehandelt werden (keine Waren), mit Verkaufsrate ab dem Grenzwert. Der Höchstpreis landet in der Liste - Point Blank Sniper kauft nur darunter. Unten kopieren und in Auktionator unter Einkaufen → Importieren einfügen." },
+  ],
   top: [
     { k: "q", label: "Item-Name enthält", type: "text" },
     { row: [{ k: "min_sale", label: "Min. Verkaufs-Ø (g)", type: "number", v: 10 },
@@ -155,6 +167,14 @@ const FILTERS = {
 };
 
 const COLS = {
+  sniper: [
+    { k: "name", t: "Item", f: itemCell },
+    { k: "quality", t: "Qualität", f: r => `<span class="q-${r.quality}">${QUAL[r.quality] || "-"}</span>` },
+    { k: "sale_rate", t: "Rate", num: 1, f: r => fix(r.sale_rate, 3) },
+    { k: "sold_per_day", t: "/Tag", num: 1, f: r => fix(r.sold_per_day, 2) },
+    { k: "usual", t: "Verkaufs-Ø", num: 1, f: r => gold(r.usual) },
+    { k: "max_gold", t: "Höchstpreis", num: 1, f: r => `<span class="g">${r.max_gold.toLocaleString("de-DE")}g</span>` },
+  ],
   niches: [
     { k: "category", t: "Kategorie", f: r => `<b>${esc(r.category)}</b><div class="sub">${esc(r.subclass)}</div>` },
     { k: "items", t: "Items", num: 1 },
@@ -247,6 +267,9 @@ function field(f, saved) {
   const v = saved[f.k] ?? f.v ?? "";
   if (f.type === "check")
     return `<label class="check"><input type="checkbox" data-k="${f.k}" ${v ? "checked" : ""}> ${f.label}</label>`;
+  if (f.type === "select")
+    return `<div><label>${f.label}</label><select data-k="${f.k}">${f.options.map(([val, lab]) =>
+      `<option value="${val}" ${String(v) === val ? "selected" : ""}>${lab}</option>`).join("")}</select></div>`;
   if (f.type === "realm")
     return `<div><label>${f.label}</label><select data-k="${f.k}"><option value="0">Alle eigenen Realms</option>${
       realms.map(r => `<option value="${r.cr_id}" ${String(v) === String(r.cr_id) ? "selected" : ""}>${esc(r.short || r.name)}</option>`).join("")}</select></div>`;
@@ -270,7 +293,7 @@ async function load() {
   if (tab === "status") return loadStatus();
   const p = new URLSearchParams({ ...readFilters(), sort: state.sort, desc: state.desc, offset: state.offset, limit: state.limit });
   const endpoint = tab === "decor" ? "decor-missing" : tab;
-  if (tab === "niches" || tab === "top") state.limit = 100;
+  if (tab === "niches" || tab === "top" || tab === "sniper") state.limit = 100;
   $("#content").innerHTML = `<div class="empty">Rechne ...</div>`;
   const res = await fetch(`/api/${endpoint}?` + p);
   const data = await res.json();
@@ -339,6 +362,16 @@ function render(data) {
     <button id="next" ${cur >= pages ? "disabled" : ""}>Weiter</button>`;
   $("#prev").onclick = () => { state.offset -= state.limit; load(); };
   $("#next").onclick = () => { state.offset += state.limit; load(); };
+  if (tab === "sniper") {
+    $("#totals").innerHTML = `<div style="grid-column:1/-1">
+      <small>Auktionator-Import (${(data.count || 0).toLocaleString("de-DE")} Items)</small>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <textarea id="exportBox" readonly style="flex:1;height:60px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px;font-size:12px">${esc(data.export || "")}</textarea>
+        <button class="btn" id="copyExport">Kopieren</button>
+      </div></div>`;
+    $("#copyExport").onclick = () => { const t = $("#exportBox"); t.select(); navigator.clipboard?.writeText(t.value); toast("Liste kopiert"); };
+    return;
+  }
   if (["decor", "niches", "search", "top"].includes(tab)) { $("#totals").innerHTML = ""; return; }
   $("#totals").innerHTML = `<div><small>Einsatz gesamt</small><b>${gold(data.sum_buy)}</b></div>
     <div><small>Erwarteter Erlös (nach Gebühr)</small><b style="color:var(--accent)">${gold(data.sum_sell)}</b></div>
@@ -396,7 +429,7 @@ async function header() {
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
   tab = b.dataset.tab;
-  state = { offset: 0, limit: 50, sort: tab === "search" ? "name" : tab === "top" ? "sold_per_day" : (tab === "decor" || tab === "niches") ? "score" : "profit",
+  state = { offset: 0, limit: 50, sort: tab === "search" ? "name" : tab === "top" ? "sold_per_day" : tab === "sniper" ? "sale_rate" : (tab === "decor" || tab === "niches") ? "score" : "profit",
             desc: tab !== "search" };
   buildFilters(); load();
 });
