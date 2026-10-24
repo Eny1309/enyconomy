@@ -479,6 +479,8 @@ def sniper(min_rate: float = 0.1, min_sale: float = 10, max_pct: float = 70, cat
     res = page(rows, sort, desc, offset, limit)
     res["export"] = (list_name.replace("^", "") or "Enyconomy Sniper") + "^" + "^".join(terms) if terms else ""
     res["count"] = len(terms)
+    # TSM-Gruppenimport: kommagetrennte Item-Strings (i:123, p:Spezies für Haustiere)
+    res["tsm_export"] = ",".join(r["key"] for r in sorted(rows, key=lambda r: -(r["sale_rate"] or 0)))
     return res
 
 

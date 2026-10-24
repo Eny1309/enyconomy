@@ -368,8 +368,14 @@ function render(data) {
       <div style="display:flex;gap:8px;margin-top:6px">
         <textarea id="exportBox" readonly style="flex:1;height:60px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px;font-size:12px">${esc(data.export || "")}</textarea>
         <button class="btn" id="copyExport">Kopieren</button>
+      </div>
+      <small style="display:block;margin-top:10px">TSM-Gruppenimport (Gruppen → Import/Export → Items importieren)</small>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <textarea id="tsmBox" readonly style="flex:1;height:44px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px;font-size:12px">${esc(data.tsm_export || "")}</textarea>
+        <button class="btn" id="copyTsm">Kopieren</button>
       </div></div>`;
     $("#copyExport").onclick = () => { const t = $("#exportBox"); t.select(); navigator.clipboard?.writeText(t.value); toast("Liste kopiert"); };
+    $("#copyTsm").onclick = () => { const t = $("#tsmBox"); t.select(); navigator.clipboard?.writeText(t.value); toast("TSM-Liste kopiert"); };
     return;
   }
   if (["decor", "niches", "search", "top"].includes(tab)) { $("#totals").innerHTML = ""; return; }
