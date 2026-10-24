@@ -10,6 +10,8 @@ import re
 import sqlite3
 import threading
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -23,6 +25,9 @@ DB_PATH = os.environ.get("DB_PATH", "/data/enyconomy.db")
 SCAN_MINUTES = int(os.environ.get("SCAN_MINUTES", "60"))
 TSM_HOURS = float(os.environ.get("TSM_HOURS", "6"))
 PET_CAGE = 82800
+TIMEZONE = os.environ.get("TIMEZONE", "Europe/Berlin")
+DEAL_PCT = float(os.environ.get("DEAL_PCT", "65"))         # Schnäppchen = Preis <= x % des Region-Verkaufs-Ø
+DEAL_MIN_RATE = float(os.environ.get("DEAL_MIN_RATE", "0.02"))
 SNIPER_MIN_RATE = float(os.environ.get("SNIPER_MIN_RATE", "0.05"))
 
 # Öffentliche Client-ID der TSM-API (aus der TSM-API-Doku), dazu dein persönlicher API-Key
@@ -44,6 +49,10 @@ CREATE TABLE IF NOT EXISTS item (item_key TEXT PRIMARY KEY, name TEXT, quality T
 CREATE TABLE IF NOT EXISTS tsm (item_key TEXT PRIMARY KEY, market INTEGER, historical INTEGER, sale_avg INTEGER,
                                 sale_rate REAL, sold_per_day REAL, updated INTEGER);
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS auction_id (cr_id INTEGER, id INTEGER, PRIMARY KEY (cr_id, id)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS deal_stats (cr_id INTEGER, ts INTEGER, weekday INTEGER, hour INTEGER,
+                                       new_auctions INTEGER, deals INTEGER, deal_value INTEGER,
+                                       PRIMARY KEY (cr_id, ts));
 CREATE TABLE IF NOT EXISTS decor (item_key TEXT PRIMARY KEY, name TEXT, quality TEXT, subclass_name TEXT,
                                   stackable INTEGER, updated INTEGER);
 """
@@ -190,6 +199,7 @@ def fetch_auctions(bz, cr_id):
         return False
     agg = {}
     n = 0
+    ids, units = [], {}
     for a in data.get("auctions", []):
         buyout = a.get("buyout")
         qty = a.get("quantity") or 1
@@ -198,6 +208,9 @@ def fetch_auctions(bz, cr_id):
         n += 1
         key = item_key(a["item"])
         unit = buyout // qty
+        if a.get("id"):
+            ids.append(a["id"])
+            units[a["id"]] = (key, unit)
         e = agg.get(key)
         if e is None:
             agg[key] = [unit, qty, 1]
@@ -206,6 +219,7 @@ def fetch_auctions(bz, cr_id):
                 e[0] = unit
             e[1] += qty
             e[2] += 1
+    record_deal_stats(cr_id, ids, units)
     with db() as con:
         con.execute("DELETE FROM listing WHERE cr_id=?", (cr_id,))
         con.executemany("INSERT INTO listing (cr_id, item_key, min_buyout, qty, n) VALUES (?, ?, ?, ?, ?)",
@@ -214,6 +228,29 @@ def fetch_auctions(bz, cr_id):
                     (cr_id, resp.headers.get("Last-Modified"), int(time.time()), n))
     log.info("Realm-Gruppe %d: %d Auktionen, %d Items", cr_id, n, len(agg))
     return True
+
+
+def record_deal_stats(cr_id, ids, units):
+    """Neue Auktionen seit dem letzten Snapshot zählen und wie viele davon Schnäppchen sind."""
+    with db() as con:
+        prev = {r[0] for r in con.execute("SELECT id FROM auction_id WHERE cr_id=?", (cr_id,))}
+        if prev:
+            tsm = {r["item_key"]: (r["sale_avg"], r["sale_rate"]) for r in
+                   con.execute("SELECT item_key, sale_avg, sale_rate FROM tsm WHERE sale_avg IS NOT NULL")}
+            new = [i for i in ids if i not in prev]
+            deals, value = 0, 0
+            for i in new:
+                key, unit = units[i]
+                t = tsm.get(key)
+                if t and (t[1] or 0) >= DEAL_MIN_RATE and unit <= t[0] * DEAL_PCT / 100:
+                    deals += 1
+                    value += t[0] - unit
+            now = datetime.now(ZoneInfo(TIMEZONE))
+            con.execute("INSERT OR REPLACE INTO deal_stats VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (cr_id, int(now.timestamp()), now.weekday(), now.hour, len(new), deals, int(value)))
+            log.info("Realm-Gruppe %d: %d neue Auktionen, %d Schnäppchen", cr_id, len(new), deals)
+        con.execute("DELETE FROM auction_id WHERE cr_id=?", (cr_id,))
+        con.executemany("INSERT OR IGNORE INTO auction_id (cr_id, id) VALUES (?, ?)", [(cr_id, i) for i in ids])
 
 
 # --------------------------------------------------------------------------

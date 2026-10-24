@@ -484,6 +484,38 @@ def sniper(min_rate: float = 0.1, min_sale: float = 10, max_pct: float = 70, cat
     return res
 
 
+@app.get("/api/timing")
+def timing(days: int = 28, realm: int = 0):
+    """Schnäppchen pro Wochentag und Stunde (Durchschnitt je Snapshot)."""
+    d = load()
+    since = int(time.time()) - days * 86400
+    crs = [realm] if realm else d["crs"]
+    q = "SELECT weekday, hour, deals, new_auctions, deal_value, ts FROM deal_stats WHERE ts >= ? AND cr_id IN (%s)" \
+        % ",".join("?" * len(crs))
+    cells = {}
+    first = None
+    with C.db() as con:
+        for r in con.execute(q, [since] + crs) if crs else []:
+            c = cells.setdefault((r["weekday"], r["hour"]), {"deals": 0, "new": 0, "value": 0, "n": 0, "days": set()})
+            c["deals"] += r["deals"]; c["new"] += r["new_auctions"]; c["value"] += r["deal_value"]; c["n"] += 1
+            c["days"].add(r["ts"] // 86400)
+            first = r["ts"] if first is None or r["ts"] < first else first
+    grid = []
+    for wd in range(7):
+        row = []
+        for h in range(24):
+            c = cells.get((wd, h))
+            # Durchschnitt pro beobachtetem Tag (Summe über die gewählten Realms)
+            per = len(c["days"]) if c else 0
+            row.append(None if not c else {"deals": round(c["deals"] / per, 1), "new": round(c["new"] / per),
+                                           "value": int(c["value"] / per), "samples": c["n"]})
+        grid.append(row)
+    best = sorted(((wd, h, v["deals"]) for wd, row in enumerate(grid) for h, v in enumerate(row) if v),
+                  key=lambda x: -x[2])[:5]
+    return {"grid": grid, "best": best, "since": first, "deal_pct": C.DEAL_PCT,
+            "snapshots": sum(c["n"] for c in cells.values())}
+
+
 @app.get("/api/item/{key}")
 def item(key: str):
     """Ein Item auf allen eigenen Realms."""

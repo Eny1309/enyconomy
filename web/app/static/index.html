@@ -82,6 +82,7 @@ tr:hover td { background: #161a24; }
   <button data-tab="decor">Deko fehlt</button>
   <button data-tab="niches">Nischen</button>
   <button data-tab="sniper">Sniper-Liste</button>
+  <button data-tab="timing">Timing</button>
   <button data-tab="status">Status</button>
 </nav>
 <main>
@@ -164,6 +165,11 @@ const FILTERS = {
     { hint: "Nachfrage = Summe aus TSM-Verkäufen/Tag × Verkaufs-Ø (Region). Angebot = Auktionen auf deinen Realms je regionalem Tagesverkauf - je kleiner, desto weniger Konkurrenz. Punkte = Nachfrage geteilt durch Konkurrenz. Klick auf eine Zeile zeigt die Top-Items." },
   ],
   status: [],
+  timing: [
+    { k: "realm", label: "Realm", type: "realm" },
+    { k: "days", label: "Zeitraum (Tage)", type: "number", v: 28 },
+    { hint: "Neue Auktionen pro Stunde, die bei Erscheinen unter dem Schnäppchen-Grenzwert lagen (DEAL_PCT in der .env, Standard 65 % des Region-Verkaufs-Ø). Durchschnitt je Stunde über alle beobachteten Tage. Braucht ein paar Tage Daten." },
+  ],
 };
 
 const COLS = {
@@ -291,6 +297,7 @@ function buildFilters() {
 
 async function load() {
   if (tab === "status") return loadStatus();
+  if (tab === "timing") return loadTiming();
   const p = new URLSearchParams({ ...readFilters(), sort: state.sort, desc: state.desc, offset: state.offset, limit: state.limit });
   const endpoint = tab === "decor" ? "decor-missing" : tab;
   if (tab === "niches" || tab === "top" || tab === "sniper") state.limit = 100;
@@ -406,6 +413,26 @@ async function toggleDetail(tr, r) {
     <div class="chip">Rate: <b>${fix(t.sale_rate, 3)}</b> · /Tag: <b>${fix(t.sold_per_day, 2)}</b></div>
   </div></td>`;
   tr.after(row);
+}
+
+const WD = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"];
+async function loadTiming() {
+  $("#pager").innerHTML = ""; $("#totals").innerHTML = "";
+  const p = new URLSearchParams(readFilters());
+  const t = await (await fetch("/api/timing?" + p)).json();
+  const max = Math.max(1, ...t.grid.flat().filter(Boolean).map(c => c.deals));
+  const cell = c => {
+    if (!c) return `<td style="background:var(--panel)"></td>`;
+    const a = c.deals / max;
+    return `<td title="${c.deals} Schnäppchen / ${c.new} neue Auktionen pro Stunde · Wert ${gold(c.value)} · ${c.samples} Messungen"
+      style="text-align:center;background:rgba(61,220,132,${(0.08 + a * 0.85).toFixed(2)});color:${a > .5 ? "#0d0f14" : "var(--text)"}">${c.deals}</td>`;
+  };
+  $("#content").innerHTML = t.snapshots ? `<div style="padding:16px">
+    <div class="hint" style="margin-bottom:10px">${t.snapshots} Messungen seit ${new Date(t.since * 1000).toLocaleDateString("de-DE")} ·
+      Grenzwert ${t.deal_pct} % · Beste Zeiten: ${t.best.map(([wd, h, v]) => `<b>${WD[wd].slice(0, 2)} ${h}-${h + 1} Uhr</b> (${v})`).join(", ")}</div>
+    <table><thead><tr><th></th>${[...Array(24).keys()].map(h => `<th style="text-align:center;cursor:default">${h}</th>`).join("")}</tr></thead>
+    <tbody>${t.grid.map((row, wd) => `<tr><td><b>${WD[wd]}</b></td>${row.map(cell).join("")}</tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">Noch keine Daten. Die Statistik startet ab dem zweiten Snapshot nach dem Update und wird über Tage aussagekräftig.</div>`;
 }
 
 async function loadStatus() {
