@@ -78,6 +78,11 @@ def init_db():
         cols = [r["name"] for r in con.execute("PRAGMA table_info(item)")]
         if "stackable" not in cols:
             con.execute("ALTER TABLE item ADD COLUMN stackable INTEGER")
+        rcols = [r["name"] for r in con.execute("PRAGMA table_info(realm)")]
+        if "locale" not in rcols:
+            con.execute("ALTER TABLE realm ADD COLUMN locale TEXT")
+            con.execute("ALTER TABLE realm ADD COLUMN rtype TEXT")
+            meta_set(con, "realms_updated", 0)  # Realm-Liste mit Sprache neu holen
 
 
 def meta_get(con, k, default=None):
@@ -152,7 +157,8 @@ def refresh_realms(bz):
             name = realm.get("name")
             if isinstance(name, dict):
                 name = name.get(LOCALE) or next(iter(name.values()), "")
-            out.append((data["id"], name, realm.get("slug")))
+            rtype = _loc((realm.get("type") or {}).get("name"))
+            out.append((data["id"], name, realm.get("slug"), realm.get("locale"), rtype))
         return out
 
     with ThreadPoolExecutor(8) as ex:
@@ -160,7 +166,7 @@ def refresh_realms(bz):
             rows.extend(part)
     with db() as con:
         con.execute("DELETE FROM realm")
-        con.executemany("INSERT OR REPLACE INTO realm (cr_id, name, slug) VALUES (?, ?, ?)", rows)
+        con.executemany("INSERT OR REPLACE INTO realm (cr_id, name, slug, locale, rtype) VALUES (?, ?, ?, ?, ?)", rows)
         meta_set(con, "realms_updated", int(time.time()))
     log.info("Realm-Gruppen: %d Realms in %d Gruppen", len(rows), len(links))
 

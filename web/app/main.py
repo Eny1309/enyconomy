@@ -12,6 +12,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("main")
 
 AH_CUT = 0.95
+LANG = {"deDE": "DE", "enGB": "EN", "enUS": "EN", "frFR": "FR", "esES": "ES", "itIT": "IT", "ptPT": "PT",
+        "ptBR": "PT", "ruRU": "RU"}
 app = FastAPI(title="Enyconomy")
 col = None
 
@@ -39,9 +41,12 @@ def load():
         if _cache["stamp"] == stamp:
             return _cache
         crs = C.tracked_cr_ids()
-        names = {}
-        for r in con.execute("SELECT cr_id, name FROM realm"):
+        names, locales, rtypes = {}, {}, {}
+        for r in con.execute("SELECT * FROM realm"):
             names.setdefault(r["cr_id"], []).append(r["name"])
+            if "locale" in r.keys():
+                locales.setdefault(r["cr_id"], []).append(r["locale"])
+                rtypes.setdefault(r["cr_id"], []).append(r["rtype"])
         listings = {}
         q = "SELECT cr_id, item_key, min_buyout, qty, n FROM listing WHERE cr_id IN (%s)" % ",".join("?" * len(crs))
         for r in con.execute(q, crs) if crs else []:
@@ -50,7 +55,7 @@ def load():
         items = {r["item_key"]: dict(r) for r in con.execute("SELECT * FROM item")}
         snaps = {r["cr_id"]: dict(r) for r in con.execute("SELECT * FROM snapshot")}
         decor = {r["item_key"]: dict(r) for r in con.execute("SELECT * FROM decor")}
-    _cache.update(stamp=stamp, crs=crs, names=names, listings=listings, tsm=tsm, items=items, snaps=snaps,
+    _cache.update(stamp=stamp, crs=crs, names=names, locales=locales, rtypes=rtypes, listings=listings, tsm=tsm, items=items, snaps=snaps,
                   decor=decor)
     return _cache
 
@@ -529,7 +534,7 @@ def scout_now():
 
 
 @app.get("/api/scout")
-def scout(hide_ru: bool = True, sort: str = "flip_profit", desc: bool = True, offset: int = 0,
+def scout(hide_ru: bool = True, lang: str = "", sort: str = "flip_profit", desc: bool = True, offset: int = 0,
           limit: int = Query(100, le=500)):
     """Rangliste aller fremden Realm-Gruppen: wo lohnt sich ein Einkaufs-Char?"""
     import json, re as _re
@@ -540,14 +545,19 @@ def scout(hide_ru: bool = True, sort: str = "flip_profit", desc: bool = True, of
     rows = []
     for r in rows_db:
         names = sorted(d["names"].get(r["cr_id"], [str(r["cr_id"])]))
-        ru = any(_re.search("[а-яА-Я]", n) for n in names)
+        langs = sorted({LANG.get(l, l or "?") for l in d["locales"].get(r["cr_id"], [])})
+        types = sorted({t for t in d["rtypes"].get(r["cr_id"], []) if t})
+        ru = "RU" in langs or any(_re.search("[а-яА-Я]", n) for n in names)
         if hide_ru and ru:
+            continue
+        if lang and lang not in langs:
             continue
         top = []
         for profit, key, unit in json.loads(r["top"] or "[]")[:5]:
             meta = d["items"].get(key) or d["decor"].get(key) or {}
             top.append(f'{meta.get("name") or key} (+{profit // 10000:,}g)'.replace(",", "."))
         rows.append({"key": str(r["cr_id"]), "realm": ", ".join(names), "realms_n": len(names), "ts": r["ts"],
+                     "lang": "/".join(langs) or "?", "rtype": ", ".join(types),
                      "auctions": r["auctions"], "items": r["items"], "deals": r["deals"],
                      "deal_value": r["deal_value"], "flips": r["flips"], "flip_profit": r["flip_profit"],
                      "top": ", ".join(top)})

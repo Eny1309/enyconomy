@@ -168,6 +168,7 @@ const FILTERS = {
   ],
   status: [],
   scout: [
+    { k: "lang", label: "Sprache", type: "select", options: [["", "Alle"], ["DE", "Deutsch"], ["EN", "Englisch"], ["FR", "Französisch"], ["ES", "Spanisch"], ["IT", "Italienisch"], ["PT", "Portugiesisch"]] },
     { k: "hide_ru", label: "Russische Realms ausblenden", type: "check", v: true },
     { k: "_scout", label: "Jetzt alle Realms scouten", type: "button", action: async () => { await fetch("/api/scout", { method: "POST" }); toast("Scout gestartet - dauert einige Minuten"); } },
     { hint: "Lädt die Auktionen aller fremden EU-Realm-Verbünde (automatisch alle 24 h). Flips = dort kaufen, auf deinen Realms verkaufen (≥100g und ≥30 % nach Gebühr, Verkaufspreis = niedrigerer Wert aus Region-Verkaufs-Ø und deinem besten Angebot). Schnäppchen = Angebote ≤ 65 % des Verkaufs-Ø. Klick auf eine Zeile zeigt die Top-Flips." },
@@ -182,6 +183,7 @@ const FILTERS = {
 const COLS = {
   scout: [
     { k: "realm", t: "Realm-Verbund", f: r => `<b>${esc(r.realm.split(", ")[0])}</b>${r.realms_n > 1 ? ` <span class="sub">+${r.realms_n - 1}</span>` : ""}<div class="sub" title="${esc(r.realm)}">${esc(r.realm.length > 60 ? r.realm.slice(0, 60) + "…" : r.realm)}</div>` },
+    { k: "lang", t: "Sprache", f: r => `<b>${esc(r.lang)}</b>${r.rtype ? `<div class="sub">${esc(r.rtype)}</div>` : ""}` },
     { k: "auctions", t: "Auktionen", num: 1, f: r => (r.auctions || 0).toLocaleString("de-DE") },
     { k: "flips", t: "Flips", num: 1 },
     { k: "flip_profit", t: "Flip-Gewinn", num: 1, f: r => `<span class="g">${gold(r.flip_profit)}</span>` },
