@@ -429,7 +429,6 @@ def top(min_sale: float = 10, min_spd: float = 0.1, category: str = "", q: str =
 @app.get("/api/sniper")
 def sniper(min_rate: float = 0.1, min_sale: float = 10, max_pct: float = 70, category: str = "", q: str = "",
            quality: str = "", list_name: str = "Enyconomy Sniper", with_prices: bool = False,
-           include_nosales: bool = True,
            sort: str = "sale_rate", desc: bool = True, offset: int = 0, limit: int = Query(100, le=500)):
     """Sniper-Liste für Auktionator/Point Blank Sniper: alle nicht regionsweit gehandelten Items
     mit ausreichender Verkaufsrate. Höchstpreis = max_pct % des Region-Verkaufs-Ø."""
@@ -438,12 +437,7 @@ def sniper(min_rate: float = 0.1, min_sale: float = 10, max_pct: float = 70, cat
     best = {}
     for key, t in d["tsm"].items():
         rate, sale = t.get("sale_rate") or 0, t.get("sale_avg") or 0
-        nosales = not t.get("sale_avg")
-        if nosales:
-            # Kein Verkaufs-Ø bei TSM: optional trotzdem aufnehmen, Wert-Filter über den Marktwert
-            if not include_nosales or (t.get("market") or 0) < min_sale * 10000:
-                continue
-        elif rate < min_rate or sale < min_sale * 10000:
+        if rate < min_rate or sale < min_sale * 10000:
             continue
         meta = d["items"].get(key) or {}
         dec = d["decor"].get(key) or {}
@@ -469,17 +463,15 @@ def sniper(min_rate: float = 0.1, min_sale: float = 10, max_pct: float = 70, cat
         q_ = meta.get("quality") or dec.get("quality")
         if qual and q_ != qual:
             continue
-        ref = sale or t.get("market") or 0
-        maxp = int(ref * max_pct / 100 / 10000)  # in Gold, wie Auktionator es erwartet
-        if maxp < 1 and not nosales:
+        maxp = int(sale * max_pct / 100 / 10000)  # in Gold, wie Auktionator es erwartet
+        if maxp < 1:
             continue
         prev = best.get(name)
-        if prev and (prev["usual"] or 0) >= sale:
+        if prev and prev["usual"] >= sale:
             continue  # gleicher Name (z. B. mehrere IDs): nur einmal, mit dem höheren Wert
         r = item_info(d, key)
-        r.update(name=name, quality=q_, **{"class": cls, "subclass": sub}, usual=sale or None,
-                 market=t.get("market"), sale_rate=rate if not nosales else None,
-                 sold_per_day=t.get("sold_per_day"), max_gold=maxp, nosales=nosales)
+        r.update(name=name, quality=q_, **{"class": cls, "subclass": sub}, usual=sale, sale_rate=rate,
+                 sold_per_day=t.get("sold_per_day"), max_gold=maxp)
         best[name] = r
     rows = list(best.values())
     # Ohne Höchstpreis entscheidet Point Blank Sniper selbst (Preisquelle x Percentage, pro Item-Variante).
