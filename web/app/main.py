@@ -428,7 +428,7 @@ def top(min_sale: float = 10, min_spd: float = 0.1, category: str = "", q: str =
 
 @app.get("/api/sniper")
 def sniper(min_rate: float = 0.1, min_sale: float = 10, max_pct: float = 70, category: str = "", q: str = "",
-           quality: str = "", list_name: str = "Enyconomy Sniper",
+           quality: str = "", list_name: str = "Enyconomy Sniper", with_prices: bool = False,
            sort: str = "sale_rate", desc: bool = True, offset: int = 0, limit: int = Query(100, le=500)):
     """Sniper-Liste für Auktionator/Point Blank Sniper: alle nicht regionsweit gehandelten Items
     mit ausreichender Verkaufsrate. Höchstpreis = max_pct % des Region-Verkaufs-Ø."""
@@ -474,8 +474,13 @@ def sniper(min_rate: float = 0.1, min_sale: float = 10, max_pct: float = 70, cat
                  sold_per_day=t.get("sold_per_day"), max_gold=maxp)
         best[name] = r
     rows = list(best.values())
-    terms = ['"{}";;0;0;0;0;0;0;0;{};;#;;'.format(r["name"].replace('"', ''), r["max_gold"])
-             for r in sorted(rows, key=lambda r: -(r["sale_rate"] or 0))]
+    # Ohne Höchstpreis entscheidet Point Blank Sniper selbst (Preisquelle x Percentage, pro Item-Variante).
+    # Mit Höchstpreis ignoriert PBS sein Percentage für diesen Eintrag.
+    if with_prices:
+        terms = ['"{}";;0;0;0;0;0;0;0;{};;#;;'.format(r["name"].replace('"', ''), r["max_gold"])
+                 for r in sorted(rows, key=lambda r: -(r["sale_rate"] or 0))]
+    else:
+        terms = ['"{}"'.format(r["name"].replace('"', '')) for r in sorted(rows, key=lambda r: -(r["sale_rate"] or 0))]
     res = page(rows, sort, desc, offset, limit)
     res["export"] = (list_name.replace("^", "") or "Enyconomy Sniper") + "^" + "^".join(terms) if terms else ""
     res["count"] = len(terms)
