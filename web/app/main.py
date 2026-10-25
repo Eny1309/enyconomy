@@ -521,6 +521,42 @@ def timing(days: int = 28, realm: int = 0):
             "snapshots": sum(c["n"] for c in cells.values())}
 
 
+@app.post("/api/scout")
+def scout_now():
+    if col:
+        col.scout_wake.set()
+    return {"ok": True}
+
+
+@app.get("/api/scout")
+def scout(hide_ru: bool = True, sort: str = "flip_profit", desc: bool = True, offset: int = 0,
+          limit: int = Query(100, le=500)):
+    """Rangliste aller fremden Realm-Gruppen: wo lohnt sich ein Einkaufs-Char?"""
+    import json, re as _re
+    d = load()
+    with C.db() as con:
+        rows_db = [dict(r) for r in con.execute("SELECT * FROM scout")]
+        updated = C.meta_get(con, "scout_updated")
+    rows = []
+    for r in rows_db:
+        names = sorted(d["names"].get(r["cr_id"], [str(r["cr_id"])]))
+        ru = any(_re.search("[а-яА-Я]", n) for n in names)
+        if hide_ru and ru:
+            continue
+        top = []
+        for profit, key, unit in json.loads(r["top"] or "[]")[:5]:
+            meta = d["items"].get(key) or d["decor"].get(key) or {}
+            top.append(f'{meta.get("name") or key} (+{profit // 10000:,}g)'.replace(",", "."))
+        rows.append({"key": str(r["cr_id"]), "realm": ", ".join(names), "realms_n": len(names), "ts": r["ts"],
+                     "auctions": r["auctions"], "items": r["items"], "deals": r["deals"],
+                     "deal_value": r["deal_value"], "flips": r["flips"], "flip_profit": r["flip_profit"],
+                     "top": ", ".join(top)})
+    res = page(rows, sort, desc, offset, limit)
+    res["updated"] = updated
+    res["running"] = bool(col and col.scouting)
+    return res
+
+
 @app.get("/api/item/{key}")
 def item(key: str):
     """Ein Item auf allen eigenen Realms."""

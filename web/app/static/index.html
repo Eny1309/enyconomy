@@ -82,6 +82,7 @@ tr:hover td { background: #161a24; }
   <button data-tab="decor">Deko fehlt</button>
   <button data-tab="niches">Nischen</button>
   <button data-tab="sniper">Sniper-Liste</button>
+  <button data-tab="scout">Realm-Scout</button>
   <button data-tab="timing">Timing</button>
   <button data-tab="status">Status</button>
 </nav>
@@ -166,6 +167,11 @@ const FILTERS = {
     { hint: "Nachfrage = Summe aus TSM-Verkäufen/Tag × Verkaufs-Ø (Region). Angebot = Auktionen auf deinen Realms je regionalem Tagesverkauf - je kleiner, desto weniger Konkurrenz. Punkte = Nachfrage geteilt durch Konkurrenz. Klick auf eine Zeile zeigt die Top-Items." },
   ],
   status: [],
+  scout: [
+    { k: "hide_ru", label: "Russische Realms ausblenden", type: "check", v: true },
+    { k: "_scout", label: "Jetzt alle Realms scouten", type: "button", action: async () => { await fetch("/api/scout", { method: "POST" }); toast("Scout gestartet - dauert einige Minuten"); } },
+    { hint: "Lädt die Auktionen aller fremden EU-Realm-Verbünde (automatisch alle 24 h). Flips = dort kaufen, auf deinen Realms verkaufen (≥100g und ≥30 % nach Gebühr, Verkaufspreis = niedrigerer Wert aus Region-Verkaufs-Ø und deinem besten Angebot). Schnäppchen = Angebote ≤ 65 % des Verkaufs-Ø. Klick auf eine Zeile zeigt die Top-Flips." },
+  ],
   timing: [
     { k: "realm", label: "Realm", type: "realm" },
     { k: "days", label: "Zeitraum (Tage)", type: "number", v: 28 },
@@ -174,6 +180,15 @@ const FILTERS = {
 };
 
 const COLS = {
+  scout: [
+    { k: "realm", t: "Realm-Verbund", f: r => `<b>${esc(r.realm.split(", ")[0])}</b>${r.realms_n > 1 ? ` <span class="sub">+${r.realms_n - 1}</span>` : ""}<div class="sub" title="${esc(r.realm)}">${esc(r.realm.length > 60 ? r.realm.slice(0, 60) + "…" : r.realm)}</div>` },
+    { k: "auctions", t: "Auktionen", num: 1, f: r => (r.auctions || 0).toLocaleString("de-DE") },
+    { k: "flips", t: "Flips", num: 1 },
+    { k: "flip_profit", t: "Flip-Gewinn", num: 1, f: r => `<span class="g">${gold(r.flip_profit)}</span>` },
+    { k: "deals", t: "Schnäppchen", num: 1 },
+    { k: "deal_value", t: "Schnäppchen-Wert", num: 1, f: r => gold(r.deal_value) },
+    { k: "ts", t: "Stand", num: 1, f: r => "vor " + ago(r.ts) },
+  ],
   sniper: [
     { k: "name", t: "Item", f: itemCell },
     { k: "quality", t: "Qualität", f: r => `<span class="q-${r.quality}">${QUAL[r.quality] || "-"}</span>` },
@@ -274,6 +289,8 @@ function field(f, saved) {
   const v = saved[f.k] ?? f.v ?? "";
   if (f.type === "check")
     return `<label class="check"><input type="checkbox" data-k="${f.k}" ${v ? "checked" : ""}> ${f.label}</label>`;
+  if (f.type === "button")
+    return `<button class="btn" data-action="${f.k}" style="width:100%">${f.label}</button>`;
   if (f.type === "select")
     return `<div><label>${f.label}</label><select data-k="${f.k}">${f.options.map(([val, lab]) =>
       `<option value="${val}" ${String(v) === val ? "selected" : ""}>${lab}</option>`).join("")}</select></div>`;
@@ -292,6 +309,7 @@ function buildFilters() {
     + (FILTERS[tab].length ? `<button class="pager" style="justify-content:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;cursor:pointer" id="reset">Filter zurücksetzen</button>` : "");
   let timer;
   $("#filters").oninput = () => { clearTimeout(timer); timer = setTimeout(() => { state.offset = 0; saveFilters(); load(); }, 350); };
+  FILTERS[tab].forEach(f => { if (f.type === "button") { const b = document.querySelector(`[data-action="${f.k}"]`); if (b) b.onclick = f.action; } });
   const reset = $("#reset");
   if (reset) reset.onclick = () => { try { localStorage.removeItem("eny-" + tab); } catch (e) {} buildFilters(); load(); };
 }
@@ -301,7 +319,7 @@ async function load() {
   if (tab === "timing") return loadTiming();
   const p = new URLSearchParams({ ...readFilters(), sort: state.sort, desc: state.desc, offset: state.offset, limit: state.limit });
   const endpoint = tab === "decor" ? "decor-missing" : tab;
-  if (tab === "niches" || tab === "top" || tab === "sniper") state.limit = 100;
+  if (["niches", "top", "sniper", "scout"].includes(tab)) state.limit = 100;
   $("#content").innerHTML = `<div class="empty">Rechne ...</div>`;
   const res = await fetch(`/api/${endpoint}?` + p);
   const data = await res.json();
@@ -386,7 +404,7 @@ function render(data) {
     $("#copyTsm").onclick = () => { const t = $("#tsmBox"); t.select(); navigator.clipboard?.writeText(t.value); toast("TSM-Liste kopiert"); };
     return;
   }
-  if (["decor", "niches", "search", "top"].includes(tab)) { $("#totals").innerHTML = ""; return; }
+  if (["decor", "niches", "search", "top", "scout"].includes(tab)) { $("#totals").innerHTML = ""; return; }
   $("#totals").innerHTML = `<div><small>Einsatz gesamt</small><b>${gold(data.sum_buy)}</b></div>
     <div><small>Erwarteter Erlös (nach Gebühr)</small><b style="color:var(--accent)">${gold(data.sum_sell)}</b></div>
     <div><small>Gewinn gesamt</small><b class="g">${gold(data.sum_profit)}</b></div>`;
@@ -395,6 +413,13 @@ function render(data) {
 async function toggleDetail(tr, r) {
   const next = tr.nextElementSibling;
   if (next && next.classList.contains("detail")) { next.remove(); return; }
+  if (tab === "scout") {
+    const row = document.createElement("tr");
+    row.className = "detail";
+    row.innerHTML = `<td colspan="${COLS[tab].length}">Top-Flips: ${esc(r.top || "-")}</td>`;
+    tr.after(row);
+    return;
+  }
   if (tab === "niches") {
     const row = document.createElement("tr");
     row.className = "detail";
@@ -463,7 +488,7 @@ async function header() {
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
   tab = b.dataset.tab;
-  state = { offset: 0, limit: 50, sort: tab === "search" ? "name" : tab === "top" ? "sold_per_day" : tab === "sniper" ? "sale_rate" : (tab === "decor" || tab === "niches") ? "score" : "profit",
+  state = { offset: 0, limit: 50, sort: tab === "search" ? "name" : tab === "top" ? "sold_per_day" : tab === "sniper" ? "sale_rate" : tab === "scout" ? "flip_profit" : (tab === "decor" || tab === "niches") ? "score" : "profit",
             desc: tab !== "search" };
   buildFilters(); load();
 });

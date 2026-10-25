@@ -24,3 +24,5 @@ Daten liegen in `./data/enyconomy.db` (SQLite). Löschen = alles neu holen.
 - `SNIPER_MIN_RATE`: ab welcher Verkaufsrate Item-Infos auch für nie gesehene Items geholt werden (Standard 0.05)
 - `DEAL_PCT`: Grenzwert für die Schnäppchen-Statistik im Tab Timing (Standard 65 % des Region-Verkaufs-Ø)
 - `TIMEZONE`: Zeitzone für Timing (Standard Europe/Berlin)
+- `SCOUT_HOURS`: Realm-Scout über alle EU-Realms alle x Stunden (Standard 24, 0 = nur per Knopf)
+- `SCOUT_MIN_PROFIT` / `SCOUT_MIN_RETURN`: Grenzen für Scout-Flips (Standard 100g / 30 %)

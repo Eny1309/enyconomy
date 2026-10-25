@@ -26,6 +26,9 @@ SCAN_MINUTES = int(os.environ.get("SCAN_MINUTES", "60"))
 TSM_HOURS = float(os.environ.get("TSM_HOURS", "6"))
 PET_CAGE = 82800
 TIMEZONE = os.environ.get("TIMEZONE", "Europe/Berlin")
+SCOUT_HOURS = float(os.environ.get("SCOUT_HOURS", "24"))   # 0 = nur per Knopf
+SCOUT_MIN_PROFIT = int(float(os.environ.get("SCOUT_MIN_PROFIT", "100")) * 10000)
+SCOUT_MIN_RETURN = float(os.environ.get("SCOUT_MIN_RETURN", "30"))
 DEAL_PCT = float(os.environ.get("DEAL_PCT", "65"))         # Schnäppchen = Preis <= x % des Region-Verkaufs-Ø
 DEAL_MIN_RATE = float(os.environ.get("DEAL_MIN_RATE", "0.02"))
 SNIPER_MIN_RATE = float(os.environ.get("SNIPER_MIN_RATE", "0.05"))
@@ -53,6 +56,9 @@ CREATE TABLE IF NOT EXISTS auction_id (cr_id INTEGER, id INTEGER, PRIMARY KEY (c
 CREATE TABLE IF NOT EXISTS deal_stats (cr_id INTEGER, ts INTEGER, weekday INTEGER, hour INTEGER,
                                        new_auctions INTEGER, deals INTEGER, deal_value INTEGER,
                                        PRIMARY KEY (cr_id, ts));
+CREATE TABLE IF NOT EXISTS scout (cr_id INTEGER PRIMARY KEY, ts INTEGER, auctions INTEGER, items INTEGER,
+                                  deals INTEGER, deal_value INTEGER, flips INTEGER, flip_profit INTEGER,
+                                  top TEXT);
 CREATE TABLE IF NOT EXISTS decor (item_key TEXT PRIMARY KEY, name TEXT, quality TEXT, subclass_name TEXT,
                                   stackable INTEGER, updated INTEGER);
 """
@@ -253,6 +259,68 @@ def record_deal_stats(cr_id, ids, units):
         con.executemany("INSERT OR IGNORE INTO auction_id (cr_id, id) VALUES (?, ?)", [(cr_id, i) for i in ids])
 
 
+def scout_realm(bz, cr_id, tsm, home):
+    """Eine fremde Realm-Gruppe bewerten: Schnäppchen und Flips zu deinen Realms."""
+    data, _ = bz.get(f"/data/wow/connected-realm/{cr_id}/auctions", "dynamic")
+    mins, n = {}, 0
+    for a in (data or {}).get("auctions", []):
+        buyout, qty = a.get("buyout"), a.get("quantity") or 1
+        if not buyout or "item" not in a:
+            continue
+        n += 1
+        key, unit = item_key(a["item"]), buyout // qty
+        if key not in mins or unit < mins[key]:
+            mins[key] = unit
+    deals = deal_value = flips = flip_profit = 0
+    top = []
+    for key, unit in mins.items():
+        t = tsm.get(key)
+        if not t or not t[0] or (t[1] or 0) < DEAL_MIN_RATE:
+            continue
+        sale = t[0]
+        if unit <= sale * DEAL_PCT / 100:
+            deals += 1
+            deal_value += sale - unit
+        listed = home.get(key)
+        sell = min(sale, max(listed)) if listed else sale
+        profit = sell * 0.95 - unit
+        if profit >= SCOUT_MIN_PROFIT and unit > 0 and profit / unit * 100 >= SCOUT_MIN_RETURN:
+            flips += 1
+            flip_profit += profit
+            top.append((int(profit), key, unit))
+    top.sort(reverse=True)
+    import json
+    with db() as con:
+        con.execute("INSERT OR REPLACE INTO scout VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (cr_id, int(time.time()), n, len(mins), deals, int(deal_value), flips, int(flip_profit),
+                     json.dumps(top[:10])))
+    return flips
+
+
+def scout_all(bz):
+    """Alle Realm-Gruppen der Region einmal durchgehen (die eigenen ausgenommen)."""
+    own = set(tracked_cr_ids())
+    with db() as con:
+        all_crs = sorted({r[0] for r in con.execute("SELECT cr_id FROM realm")})
+        tsm = {r["item_key"]: (r["sale_avg"], r["sale_rate"]) for r in
+               con.execute("SELECT item_key, sale_avg, sale_rate FROM tsm WHERE sale_avg IS NOT NULL")}
+        home = {}
+        for r in con.execute("SELECT item_key, min_buyout FROM listing WHERE cr_id IN (%s)" % ",".join("?" * len(own)),
+                             list(own)) if own else []:
+            home.setdefault(r["item_key"], []).append(r["min_buyout"])
+    todo = [cr for cr in all_crs if cr not in own]
+    log.info("Realm-Scout: %d Realm-Gruppen ...", len(todo))
+    for i, cr in enumerate(todo, 1):
+        try:
+            f = scout_realm(bz, cr, tsm, home)
+            log.info("Scout %d/%d: Realm-Gruppe %d - %d Flips", i, len(todo), cr, f)
+        except Exception as e:
+            log.warning("Scout Realm-Gruppe %d: %s", cr, e)
+    with db() as con:
+        meta_set(con, "scout_updated", int(time.time()))
+    log.info("Realm-Scout fertig")
+
+
 # --------------------------------------------------------------------------
 # Item-Metadaten (deutsche Namen, Qualität, Bindung, Icon)
 # --------------------------------------------------------------------------
@@ -430,6 +498,8 @@ class Collector:
         self.bz = Blizzard(os.environ["BLIZZARD_CLIENT_ID"], os.environ["BLIZZARD_CLIENT_SECRET"])
         self.tsm_key = os.environ.get("TSM_API_KEY", "")
         self.wake = threading.Event()
+        self.scout_wake = threading.Event()
+        self.scouting = False
         self.running = False
         self.last_error = None
 
@@ -477,5 +547,23 @@ class Collector:
             self.wake.wait(SCAN_MINUTES * 60)
             self.wake.clear()
 
+    def scout_loop(self):
+        time.sleep(300)  # erst den normalen Lauf durchlassen
+        while True:
+            with db() as con:
+                last = int(meta_get(con, "scout_updated", 0))
+            due = SCOUT_HOURS > 0 and time.time() - last > SCOUT_HOURS * 3600
+            if due or self.scout_wake.is_set():
+                self.scout_wake.clear()
+                self.scouting = True
+                try:
+                    scout_all(self.bz)
+                except Exception as e:
+                    log.exception("Realm-Scout: %s", e)
+                finally:
+                    self.scouting = False
+            self.scout_wake.wait(600)
+
     def start(self):
         threading.Thread(target=self.loop, daemon=True).start()
+        threading.Thread(target=self.scout_loop, daemon=True).start()
