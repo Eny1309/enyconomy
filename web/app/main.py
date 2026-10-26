@@ -432,7 +432,7 @@ def top(min_sale: float = 10, min_spd: float = 0.1, category: str = "", q: str =
 
 
 @app.get("/api/sniper")
-def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max_items: int = 3000,
+def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max_items: int = 0,
            max_pct: float = 70, category: str = "", q: str = "",
            quality: str = "", list_name: str = "Enyconomy Sniper", with_prices: bool = False,
            sort: str = "score", desc: bool = True, offset: int = 0, limit: int = Query(100, le=500)):
@@ -441,25 +441,29 @@ def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max
     d = load()
     cat, ql, qual = category.strip().lower(), q.strip().lower(), quality.strip().upper()
     best = {}
+    skipped = {"filter": 0, "commodity": 0, "no_info": 0, "bound": 0}
     for key, t in d["tsm"].items():
         rate, sale = t.get("sale_rate") or 0, t.get("sale_avg") or 0
         if rate < min_rate or sale < min_sale * 10000 or (t.get("sold_per_day") or 0) < min_spd:
+            skipped["filter"] += 1
             continue
         meta = d["items"].get(key) or {}
         dec = d["decor"].get(key) or {}
         if not meta.get("ok") and not dec:
-            continue  # ohne Metadaten wissen wir nicht, ob es eine Ware ist
+            skipped["no_info"] += 1  # noch keine Item-Infos (Name/Ware?) - werden beim nächsten Lauf geholt
+            continue
         stack = meta.get("stackable")
         if stack is None and dec:
             stack = dec.get("stackable")
-        if stack is None and key not in d["listings"]:
-            continue  # unbekannt und nie auf einem eigenen Realm gesehen -> eher Ware
         if stack:
-            continue  # Waren (regionsweit) raus
+            skipped["commodity"] += 1  # Waren (regionsweit) raus
+            continue
         if meta.get("binding") in ("ON_ACQUIRE", "QUEST") or meta.get("class_id") == 12:
+            skipped["bound"] += 1
             continue
         name = meta.get("name") or dec.get("name")
         if not name:
+            skipped["no_info"] += 1
             continue
         cls, sub = meta.get("class_name") or ("Behausung" if dec else None), meta.get("subclass_name") or dec.get("subclass_name")
         if cat and cat not in (cls or "").lower() and cat not in (sub or "").lower():
@@ -496,6 +500,7 @@ def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max
     # TSM-Gruppenimport: kommagetrennte Item-Strings (i:123, p:Spezies für Haustiere)
     res["tsm_export"] = ",".join(r["key"] for r in rows)
     res["found"] = total_found
+    res["skipped"] = skipped
     return res
 
 
