@@ -432,9 +432,10 @@ def top(min_sale: float = 10, min_spd: float = 0.1, category: str = "", q: str =
 
 
 @app.get("/api/sniper")
-def sniper(min_rate: float = 0.1, min_sale: float = 10, max_pct: float = 70, category: str = "", q: str = "",
+def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max_items: int = 3000,
+           max_pct: float = 70, category: str = "", q: str = "",
            quality: str = "", list_name: str = "Enyconomy Sniper", with_prices: bool = False,
-           sort: str = "sale_rate", desc: bool = True, offset: int = 0, limit: int = Query(100, le=500)):
+           sort: str = "score", desc: bool = True, offset: int = 0, limit: int = Query(100, le=500)):
     """Sniper-Liste für Auktionator/Point Blank Sniper: alle nicht regionsweit gehandelten Items
     mit ausreichender Verkaufsrate. Höchstpreis = max_pct % des Region-Verkaufs-Ø."""
     d = load()
@@ -442,7 +443,7 @@ def sniper(min_rate: float = 0.1, min_sale: float = 10, max_pct: float = 70, cat
     best = {}
     for key, t in d["tsm"].items():
         rate, sale = t.get("sale_rate") or 0, t.get("sale_avg") or 0
-        if rate < min_rate or sale < min_sale * 10000:
+        if rate < min_rate or sale < min_sale * 10000 or (t.get("sold_per_day") or 0) < min_spd:
             continue
         meta = d["items"].get(key) or {}
         dec = d["decor"].get(key) or {}
@@ -476,21 +477,25 @@ def sniper(min_rate: float = 0.1, min_sale: float = 10, max_pct: float = 70, cat
             continue  # gleicher Name (z. B. mehrere IDs): nur einmal, mit dem höheren Wert
         r = item_info(d, key)
         r.update(name=name, quality=q_, **{"class": cls, "subclass": sub}, usual=sale, sale_rate=rate,
-                 sold_per_day=t.get("sold_per_day"), max_gold=maxp)
+                 sold_per_day=t.get("sold_per_day"), max_gold=maxp,
+                 score=int((t.get("sold_per_day") or 0) * sale))  # erwarteter Umsatz pro Tag
         best[name] = r
-    rows = list(best.values())
+    total_found = len(best)
+    rows = sorted(best.values(), key=lambda r: -r["score"])
+    if max_items > 0:
+        rows = rows[:max_items]
     # Ohne Höchstpreis entscheidet Point Blank Sniper selbst (Preisquelle x Percentage, pro Item-Variante).
     # Mit Höchstpreis ignoriert PBS sein Percentage für diesen Eintrag.
     if with_prices:
-        terms = ['"{}";;0;0;0;0;0;0;0;{};;#;;'.format(r["name"].replace('"', ''), r["max_gold"])
-                 for r in sorted(rows, key=lambda r: -(r["sale_rate"] or 0))]
+        terms = ['"{}";;0;0;0;0;0;0;0;{};;#;;'.format(r["name"].replace('"', ''), r["max_gold"]) for r in rows]
     else:
-        terms = ['"{}"'.format(r["name"].replace('"', '')) for r in sorted(rows, key=lambda r: -(r["sale_rate"] or 0))]
+        terms = ['"{}"'.format(r["name"].replace('"', '')) for r in rows]
     res = page(rows, sort, desc, offset, limit)
     res["export"] = (list_name.replace("^", "") or "Enyconomy Sniper") + "^" + "^".join(terms) if terms else ""
     res["count"] = len(terms)
     # TSM-Gruppenimport: kommagetrennte Item-Strings (i:123, p:Spezies für Haustiere)
-    res["tsm_export"] = ",".join(r["key"] for r in sorted(rows, key=lambda r: -(r["sale_rate"] or 0)))
+    res["tsm_export"] = ",".join(r["key"] for r in rows)
+    res["found"] = total_found
     return res
 
 

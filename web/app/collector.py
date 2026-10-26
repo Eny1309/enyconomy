@@ -125,9 +125,11 @@ class Blizzard:
         self.token, self.expires = j["access_token"], time.time() + j.get("expires_in", 3600)
         return self.token
 
-    def get(self, path, namespace, headers=None, absolute=False):
+    def get(self, path, namespace, headers=None, absolute=False, params=None):
         url = path if absolute else API + path
-        params = {} if absolute else {"namespace": f"{namespace}-{REGION}", "locale": LOCALE}
+        p = {} if absolute else {"namespace": f"{namespace}-{REGION}", "locale": LOCALE}
+        p.update(params or {})
+        params = p
         h = {"Authorization": f"Bearer {self._token()}"}
         h.update(headers or {})
         for attempt in range(5):
@@ -439,6 +441,68 @@ def refresh_decor(bz):
 
 
 # --------------------------------------------------------------------------
+# Item-Infos in großen Paketen: alle Items aus den TSM-Regionsdaten
+# --------------------------------------------------------------------------
+def fill_bulk_meta(bz):
+    """Name, Qualität, Kategorie und 'stapelbar' für alle TSM-Items über die Blizzard-Suche
+    (1000 Item-IDs pro Abfrage) und alle Haustiere über den Haustier-Index."""
+    with db() as con:
+        missing = [r["item_key"] for r in con.execute(
+            """SELECT t.item_key FROM tsm t LEFT JOIN item i ON i.item_key = t.item_key
+               WHERE i.item_key IS NULL OR i.stackable IS NULL""")]
+    item_ids = sorted({int(k[2:]) for k in missing if k.startswith("i:")})
+    pet_ids = {int(k[2:]) for k in missing if k.startswith("p:")}
+    now, rows = int(time.time()), []
+
+    if pet_ids:
+        data, _ = bz.get("/data/wow/pet/index", "static")
+        for p in (data or {}).get("pets", []):
+            if p.get("id") in pet_ids:
+                rows.append((f"p:{p['id']}", _loc(p.get("name")), "PET", 17, "Haustier", None,
+                             None, None, None, now, 1, 0))
+        _store_meta(rows)
+        log.info("Haustier-Namen: %d", len(rows))
+
+    chunks = sorted({i // 1000 for i in item_ids})
+    if not chunks:
+        return
+    wanted = set(item_ids)
+    log.info("Item-Infos in Paketen: %d Items in %d Abfragen ...", len(item_ids), len(chunks))
+    done = 0
+
+    def one(chunk):
+        lo, hi = chunk * 1000, chunk * 1000 + 999
+        data, _ = bz.get("/data/wow/search/item", "static",
+                         params={"id": f"[{lo},{hi}]", "orderby": "id", "_pageSize": 1000, "_page": 1})
+        out = []
+        for res in (data or {}).get("results", []):
+            d = res.get("data") or {}
+            iid = d.get("id")
+            if iid not in wanted:
+                continue
+            out.append((f"i:{iid}", _loc(d.get("name")), (d.get("quality") or {}).get("type"),
+                        (d.get("item_class") or {}).get("id"), _loc((d.get("item_class") or {}).get("name")),
+                        _loc((d.get("item_subclass") or {}).get("name")), None, d.get("level"), None, now, 1,
+                        1 if d.get("is_stackable") else 0))
+        return out
+
+    with ThreadPoolExecutor(6) as ex:
+        for part in ex.map(one, chunks):
+            # vorhandene Einträge (mit Icon/Bindung) nicht überschreiben, nur ergänzen
+            with db() as con:
+                for r in part:
+                    cur = con.execute("SELECT ok FROM item WHERE item_key=?", (r[0],)).fetchone()
+                    if cur:
+                        con.execute("UPDATE item SET stackable=? WHERE item_key=?", (r[11], r[0]))
+                    else:
+                        con.execute("""INSERT INTO item (item_key, name, quality, class_id, class_name, subclass_name,
+                                       binding, level, icon, fetched_at, ok, stackable)
+                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", r)
+            done += len(part)
+    log.info("Item-Infos in Paketen: %d Items ergänzt", done)
+
+
+# --------------------------------------------------------------------------
 # TSM-API (Regionsdaten: Verkaufs-Ø, Verkaufsrate, Verkäufe/Tag)
 # --------------------------------------------------------------------------
 def tsm_token(api_key):
@@ -537,6 +601,10 @@ class Collector:
                 except Exception as e:
                     log.exception("Auktionen Realm-Gruppe %d: %s", cr, e)
                     self.last_error = f"Auktionen {cr}: {e}"
+            try:
+                fill_bulk_meta(self.bz)
+            except Exception as e:
+                log.exception("Item-Infos (Pakete): %s", e)
             fill_item_meta(self.bz)
             with db() as con:
                 meta_set(con, "last_run", int(time.time()))
