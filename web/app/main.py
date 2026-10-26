@@ -441,11 +441,21 @@ def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max
     d = load()
     cat, ql, qual = category.strip().lower(), q.strip().lower(), quality.strip().upper()
     best = {}
-    skipped = {"filter": 0, "commodity": 0, "no_info": 0, "bound": 0}
+    skipped = {"filter": 0, "commodity": 0, "no_info": 0, "bound": 0,
+               "no_sales": 0, "cheap": 0, "low_rate": 0, "low_spd": 0}
     for key, t in d["tsm"].items():
         rate, sale = t.get("sale_rate") or 0, t.get("sale_avg") or 0
-        if rate < min_rate or sale < min_sale * 10000 or (t.get("sold_per_day") or 0) < min_spd:
-            skipped["filter"] += 1
+        if not t.get("sale_avg"):
+            skipped["filter"] += 1; skipped["no_sales"] += 1   # TSM kennt keine Verkäufe
+            continue
+        if sale < min_sale * 10000:
+            skipped["filter"] += 1; skipped["cheap"] += 1
+            continue
+        if rate < min_rate:
+            skipped["filter"] += 1; skipped["low_rate"] += 1
+            continue
+        if (t.get("sold_per_day") or 0) < min_spd:
+            skipped["filter"] += 1; skipped["low_spd"] += 1
             continue
         meta = d["items"].get(key) or {}
         dec = d["decor"].get(key) or {}
