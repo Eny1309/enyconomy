@@ -116,7 +116,7 @@ const FILTERS = {
     { k: "with_prices", label: "Auch Items mit TSM-Daten mit Höchstpreis (sonst bewertet PBS per Percentage)", type: "check", v: false },
     { k: "max_pct", label: "… Höchstpreis = % vom Verkaufs-Ø", type: "number", v: 100 },
     { hint: "Alle Items, die einzeln im Auktionshaus gehandelt werden - ohne Vorfilter, die Bewertung macht PBS. Raus sind nur Waren (stapelbar). Items ohne TSM-Verkaufs-Ø bekommen einen Höchstpreis (höchster bekannter Wert), damit PBS sie bewerten kann. Unten kopieren und in Auktionator unter Einkaufen → Importieren einfügen." },
-  ]
+  ],
   top: [
     { k: "q", label: "Item-Name enthält", type: "text" },
     { row: [{ k: "min_sale", label: "Min. Verkaufs-Ø (g)", type: "number", v: 10 },
@@ -201,7 +201,7 @@ const COLS = {
     { k: "sale_rate", t: "Rate", num: 1, f: r => fix(r.sale_rate, 3) },
     { k: "sold_per_day", t: "/Tag", num: 1, f: r => fix(r.sold_per_day, 2) },
     { k: "eu_realms", t: "EU-Realms", num: 1 },
-  ]
+  ],
   niches: [
     { k: "category", t: "Kategorie", f: r => `<b>${esc(r.category)}</b><div class="sub">${esc(r.subclass)}</div>` },
     { k: "items", t: "Items", num: 1 },
