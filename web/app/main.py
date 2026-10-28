@@ -629,6 +629,71 @@ def scout(hide_ru: bool = True, lang: str = "", sort: str = "flip_profit", desc:
     return res
 
 
+@app.get("/api/favorite-keys")
+def favorite_keys():
+    with C.db() as con:
+        return [r[0] for r in con.execute("SELECT item_key FROM favorite")]
+
+
+@app.post("/api/favorite/{key}")
+def favorite_toggle(key: str):
+    """Favorit an/aus."""
+    with C.db() as con:
+        if con.execute("SELECT 1 FROM favorite WHERE item_key=?", (key,)).fetchone():
+            con.execute("DELETE FROM favorite WHERE item_key=?", (key,))
+            return {"key": key, "fav": False}
+        con.execute("INSERT INTO favorite (item_key, added) VALUES (?, ?)", (key, int(time.time())))
+        return {"key": key, "fav": True}
+
+
+@app.get("/api/favorites")
+def favorites(sort: str = "pct", desc: bool = False, offset: int = 0, limit: int = Query(100, le=500)):
+    """Favoriten: wo ist das Item gerade am günstigsten (alle EU-Realms) - und wie steht das zum Verkaufs-Ø."""
+    d = load()
+    own = set(d["crs"])
+    with C.db() as con:
+        keys = [r[0] for r in con.execute("SELECT item_key FROM favorite")]
+        stamp = {r["cr_id"]: r["ts"] for r in con.execute("SELECT cr_id, ts FROM scout")}
+        for r in con.execute("SELECT k, v FROM meta WHERE k LIKE 'live:%'"):
+            c = int(r["k"].split(":")[1])
+            stamp[c] = max(stamp.get(c, 0), int(r["v"]))
+        for c, snap in d["snaps"].items():
+            stamp[c] = snap.get("fetched_at") or stamp.get(c)
+        per = {}
+        if keys:
+            q = ",".join("?" * len(keys))
+            for r in con.execute(f"SELECT item_key, cr_id, min_buyout, qty FROM eu_listing WHERE item_key IN ({q})", keys):
+                per.setdefault(r["item_key"], {})[r["cr_id"]] = (r["min_buyout"], r["qty"])
+            for r in con.execute(f"SELECT item_key, cr_id, min_buyout, qty FROM listing WHERE item_key IN ({q})", keys):
+                per.setdefault(r["item_key"], {})[r["cr_id"]] = (r["min_buyout"], r["qty"])
+    rows = []
+    for key in keys:
+        r = item_info(d, key)
+        dec = d["decor"].get(key) or {}
+        if r["name"] == key and dec.get("name"):
+            r.update(name=dec["name"], quality=dec.get("quality"))
+        t = d["tsm"].get(key) or {}
+        offers = sorted(per.get(key, {}).items(), key=lambda x: x[1][0])
+        cheap = offers[0] if offers else None
+        own_off = [o for o in offers if o[0] in own]
+        usual = t.get("sale_avg")
+        r.update(usual=usual, market=t.get("market"), sale_rate=t.get("sale_rate"), sold_per_day=t.get("sold_per_day"),
+                 offers=len(offers),
+                 best=cheap[1][0] if cheap else None, best_cr=cheap[0] if cheap else None,
+                 best_realm=(realm_short(d, cheap[0]) if cheap[0] in own else realm_full(d, cheap[0])) if cheap else None,
+                 best_own=cheap[0] in own if cheap else False, best_ts=stamp.get(cheap[0]) if cheap else None,
+                 own_best=own_off[0][1][0] if own_off else None,
+                 own_best_realm=realm_short(d, own_off[0][0]) if own_off else None,
+                 next=", ".join(f"{gold_txt(o[1][0])} {realm_full(d, o[0]).split(',')[0]}" for o in offers[1:4]),
+                 pct=round(cheap[1][0] / usual * 100) if cheap and usual else None)
+        rows.append(r)
+    return page(rows, sort, desc, offset, limit)
+
+
+def gold_txt(c):
+    return f"{c // 10000:,}g".replace(",", ".")
+
+
 @app.get("/api/item/{key}")
 def item(key: str, cr: int = 0):
     """Item-Detail: Preise auf allen EU-Realm-Gruppen, Angebote auf einem eigenen Realm, Preisverlauf."""
@@ -669,6 +734,8 @@ def item(key: str, cr: int = 0):
     realms.sort(key=lambda x: x["min"])
     all_realms = sorted(({"cr_id": c, "name": realm_full(d, c)} for c in d["names"] if c not in own),
                         key=lambda x: x["name"].lower())
+    with C.db() as con:
+        r["fav"] = con.execute("SELECT 1 FROM favorite WHERE item_key=?", (key,)).fetchone() is not None
     r.update(realms=realms, cr=cr, listings=points, live_ts=live_ts, live_err=live_err, all_realms=all_realms, history=hist, scout_updated=scout_updated,
              eu_qty=sum(x["qty"] for x in realms), eu_realms=len(realms),
              own_realms=[{"cr_id": c, "name": realm_short(d, c)} for c in d["crs"]])

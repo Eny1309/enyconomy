@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS price_point (cr_id INTEGER, item_key TEXT, unit INTEG
                                         PRIMARY KEY (item_key, cr_id, unit)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS eu_history (item_key TEXT, day TEXT, low INTEGER, median INTEGER, qty INTEGER,
                                        realms INTEGER, sale_avg INTEGER, PRIMARY KEY (item_key, day)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS favorite (item_key TEXT PRIMARY KEY, added INTEGER);
 CREATE TABLE IF NOT EXISTS decor (item_key TEXT PRIMARY KEY, name TEXT, quality TEXT, subclass_name TEXT,
                                   stackable INTEGER, updated INTEGER);
 """

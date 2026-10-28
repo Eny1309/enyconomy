@@ -42,6 +42,8 @@ th.sorted { color: var(--accent2); }
 td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 tr:hover td { background: #161a24; }
 .item { display: flex; align-items: center; gap: 10px; }
+.star { cursor: pointer; color: var(--muted); font-size: 17px; line-height: 1; }
+.star.on { color: var(--accent); }
 .item img { width: 30px; height: 30px; border-radius: 5px; border: 1px solid var(--line); }
 .item .nm { font-weight: 600; cursor: pointer; }
 .item .sub { font-size: 12px; color: var(--muted); }
@@ -103,6 +105,7 @@ tr:hover td { background: #161a24; }
 </header>
 <nav>
   <button data-tab="search">Suche</button>
+  <button data-tab="favorites">Favoriten</button>
   <button data-tab="flips" class="on">Flips</button>
   <button data-tab="top">Topliste</button>
   <button data-tab="deals">Deals</button>
@@ -127,9 +130,12 @@ tr:hover td { background: #161a24; }
 <script>
 const $ = s => document.querySelector(s);
 const QUAL = { POOR: "Schlecht", COMMON: "Gewöhnlich", UNCOMMON: "Selten", RARE: "Rar", EPIC: "Episch", LEGENDARY: "Legendär", PET: "Haustier" };
-let tab = "flips", realms = [], state = { offset: 0, limit: 50, sort: "profit", desc: true };
+let tab = "flips", realms = [], favs = new Set(), state = { offset: 0, limit: 50, sort: "profit", desc: true };
 
 const FILTERS = {
+  favorites: [
+    { hint: "Deine Favoriten: wo sie gerade EU-weit am günstigsten sind. % vom Ø = günstigster Preis im Verhältnis zum TSM-Verkaufs-Ø (niedrig = gut). Fremde Realms haben den Stand vom letzten Realm-Scout oder vom letzten Live-Abruf im Item-Fenster, deine Realms den stündlichen. Favorit setzen: Stern beim Item oder im Item-Fenster." },
+  ],
   sniper: [
     { k: "list_name", label: "Listenname", type: "text", v: "Enyconomy Sniper" },
     { hint: "Optionale Filter - alle standardmäßig aus (0 / leer):" },
@@ -213,6 +219,16 @@ const FILTERS = {
 };
 
 const COLS = {
+  favorites: [
+    { k: "name", t: "Item", f: itemCell },
+    { k: "best", t: "Günstigster EU", num: 1, f: r => r.best == null ? '<span class="sub">nirgends</span>' : `<b class="${r.pct != null && r.pct <= 70 ? "g" : ""}">${gold(r.best)}</b><div class="sub">${esc((r.best_realm || "").split(",")[0])}${r.best_own ? " (deiner)" : ""} · vor ${ago(r.best_ts)}</div>` },
+    { k: "pct", t: "% vom Ø", num: 1, f: r => r.pct == null ? "-" : `<span class="${r.pct <= 70 ? "g" : r.pct >= 100 ? "r" : ""}">${r.pct} %</span>` },
+    { k: "usual", t: "Verkaufs-Ø", num: 1, f: r => gold(r.usual) },
+    { k: "own_best", t: "Deine Realms", num: 1, f: r => r.own_best == null ? '<span class="sub">–</span>' : `${gold(r.own_best)}<div class="sub">${esc(r.own_best_realm)}</div>` },
+    { k: "next", t: "Nächstgünstige", f: r => `<span class="sub" style="white-space:normal">${esc(r.next || "-")}</span>` },
+    { k: "offers", t: "Realms", num: 1 },
+    { k: "sold_per_day", t: "/Tag", num: 1, f: r => fix(r.sold_per_day, 2) },
+  ],
   scout: [
     { k: "realm", t: "Realm-Verbund", f: r => `<b>${esc(r.realm.split(", ")[0])}</b>${r.realms_n > 1 ? ` <span class="sub">+${r.realms_n - 1}</span>` : ""}<div class="sub" title="${esc(r.realm)}">${esc(r.realm.length > 60 ? r.realm.slice(0, 60) + "…" : r.realm)}</div>` },
     { k: "lang", t: "Sprache", f: r => `<b>${esc(r.lang)}</b>${r.rtype ? `<div class="sub">${esc(r.rtype)}</div>` : ""}` },
@@ -303,7 +319,8 @@ function itemCell(r) {
   const link = r.pet ? `https://www.wowhead.com/de/battle-pet/${r.id}` : `https://www.wowhead.com/de/item=${r.id}`;
   const icon = r.icon ? `<img src="${esc(r.icon)}" alt="">` : `<img alt="">`;
   const sub = [r.class, r.subclass, r.level ? "St. " + r.level : null].filter(Boolean).join(" · ");
-  return `<div class="item">${icon}<div><span class="nm q-${r.quality}" data-copy="${esc(r.name)}" title="Klick: Name kopieren (für die AH-Suche)">${esc(r.name)}</span>
+  const star = `<span class="star ${favs.has(r.key) ? "on" : ""}" data-fav="${esc(r.key)}" title="Favorit">${favs.has(r.key) ? "★" : "☆"}</span>`;
+  return `<div class="item">${star}${icon}<div><span class="nm q-${r.quality}" data-copy="${esc(r.name)}" title="Klick: Name kopieren (für die AH-Suche)">${esc(r.name)}</span>
     <a href="${link}" target="_blank" rel="noopener">wowhead ↗</a><div class="sub">${esc(sub)}</div></div></div>`;
 }
 
@@ -353,7 +370,7 @@ async function load() {
   if (tab === "timing") return loadTiming();
   const p = new URLSearchParams({ ...readFilters(), sort: state.sort, desc: state.desc, offset: state.offset, limit: state.limit });
   const endpoint = tab === "decor" ? "decor-missing" : tab;
-  if (["niches", "top", "sniper", "scout"].includes(tab)) state.limit = 100;
+  if (["niches", "top", "sniper", "scout", "favorites"].includes(tab)) state.limit = 100;
   $("#content").innerHTML = `<div class="empty">Rechne ...</div>`;
   const res = await fetch(`/api/${endpoint}?` + p);
   const data = await res.json();
@@ -397,7 +414,7 @@ function render(data) {
   if (tab === "top") COLS.top = topCols();
   const cols = COLS[tab];
   if (!data.rows.length) {
-    $("#content").innerHTML = `<div class="empty">${tab === "search" ? "Item-Namen eingeben (mind. 2 Zeichen)." : "Keine Treffer. Filter lockern oder auf den ersten Scan warten (Tab Status)."}</div>`;
+    $("#content").innerHTML = `<div class="empty">${tab === "search" ? "Item-Namen eingeben (mind. 2 Zeichen)." : tab === "favorites" ? "Noch keine Favoriten. Klick auf den Stern ☆ bei einem Item." : "Keine Treffer. Filter lockern oder auf den ersten Scan warten (Tab Status)."}</div>`;
   } else {
     $("#content").innerHTML = `<table><thead><tr>${cols.map(c =>
       `<th data-s="${c.k}" class="${c.num ? "num" : ""} ${state.sort === c.k ? "sorted" : ""}">${c.t}${state.sort === c.k ? (state.desc ? " ▼" : " ▲") : ""}</th>`).join("")}</tr></thead>
@@ -410,6 +427,8 @@ function render(data) {
       state.offset = 0; load();
     });
     document.querySelectorAll("tbody tr[data-i]").forEach(tr => tr.onclick = ev => {
+      const st = ev.target.closest("[data-fav]");
+      if (st) { toggleFav(st.dataset.fav); return; }
       const copy = ev.target.closest("[data-copy]");
       if (copy) { navigator.clipboard?.writeText(copy.dataset.copy); toast("Kopiert: " + copy.dataset.copy); return; }
       if (ev.target.closest("a")) return;
@@ -442,7 +461,7 @@ function render(data) {
     $("#copyTsm").onclick = () => { const t = $("#tsmBox"); t.select(); navigator.clipboard?.writeText(t.value); toast("TSM-Liste kopiert"); };
     return;
   }
-  if (["decor", "niches", "search", "top", "scout"].includes(tab)) { $("#totals").innerHTML = ""; return; }
+  if (["decor", "niches", "search", "top", "scout", "favorites"].includes(tab)) { $("#totals").innerHTML = ""; return; }
   $("#totals").innerHTML = `<div><small>Einsatz gesamt</small><b>${gold(data.sum_buy)}</b></div>
     <div><small>Erwarteter Erlös (nach Gebühr)</small><b style="color:var(--accent)">${gold(data.sum_sell)}</b></div>
     <div><small>Gewinn gesamt</small><b class="g">${gold(data.sum_profit)}</b></div>`;
@@ -522,6 +541,7 @@ async function openItem(key, cr) {
       <select id="mRealm" style="max-width:280px"><optgroup label="Deine Realms">${d.own_realms.map(o => `<option value="${o.cr_id}" ${o.cr_id === d.cr ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</optgroup>
         <optgroup label="Alle EU-Realms">${d.all_realms.map(o => `<option value="${o.cr_id}" ${o.cr_id === d.cr ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</optgroup></select>
       <div class="avail"><b>${d.eu_qty.toLocaleString("de-DE")}</b><small>verfügbar EU · ${d.eu_realms} Realm-Gruppen</small></div>
+      <span class="star ${favs.has(key) ? "on" : ""}" id="mFav" style="font-size:26px" title="Favorit">${favs.has(key) ? "★" : "☆"}</span>
       <button class="btn" id="mClose">Schließen</button>
     </div>
     <div class="mbody">
@@ -552,9 +572,17 @@ async function openItem(key, cr) {
       </div>
     </div></div>`;
   $("#mClose").onclick = closeItem;
+  $("#mFav").onclick = async () => { await toggleFav(key); const on = favs.has(key); $("#mFav").textContent = on ? "★" : "☆"; $("#mFav").classList.toggle("on", on); };
   const pick = cr => { $("#mRealm").disabled = true; $(".mside").innerHTML = `<div class="empty">Lade Auktionen dieses Realms ...<br><small>fremde Realms beim ersten Mal ein paar Sekunden</small></div>`; openItem(key, cr); };
   $("#mRealm").onchange = e => pick(+e.target.value);
   document.querySelectorAll(".mtable tr[data-cr]").forEach(tr => tr.onclick = () => pick(+tr.dataset.cr));
+}
+async function toggleFav(key) {
+  const res = await (await fetch(`/api/favorite/${key}`, { method: "POST" })).json();
+  if (res.fav) favs.add(key); else favs.delete(key);
+  document.querySelectorAll(`[data-fav="${key}"]`).forEach(el => { el.textContent = res.fav ? "★" : "☆"; el.classList.toggle("on", res.fav); });
+  toast(res.fav ? "Favorit gespeichert" : "Favorit entfernt");
+  if (tab === "favorites") load();
 }
 function closeItem() { $("#modal").classList.remove("on"); $("#modal").innerHTML = ""; }
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeItem(); });
@@ -612,14 +640,15 @@ async function header() {
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
   tab = b.dataset.tab;
-  state = { offset: 0, limit: 50, sort: tab === "search" ? "name" : tab === "top" ? "sold_per_day" : tab === "sniper" ? "score" : tab === "scout" ? "flip_profit" : (tab === "decor" || tab === "niches") ? "score" : "profit",
-            desc: tab !== "search" };
+  state = { offset: 0, limit: 50, sort: tab === "search" ? "name" : tab === "top" ? "sold_per_day" : tab === "sniper" ? "score" : tab === "scout" ? "flip_profit" : tab === "favorites" ? "pct" : (tab === "decor" || tab === "niches") ? "score" : "profit",
+            desc: tab !== "search" && tab !== "favorites" };
   buildFilters(); load();
 });
 $("#scanBtn").onclick = async () => { await fetch("/api/scan", { method: "POST" }); toast("Scan gestartet"); setTimeout(header, 1500); };
 
 (async () => {
   try { realms = await (await fetch("/api/realms")).json(); } catch (e) {}
+  try { favs = new Set(await (await fetch("/api/favorite-keys")).json()); } catch (e) {}
   buildFilters(); load(); header(); setInterval(header, 60000);
 })();
 </script>
