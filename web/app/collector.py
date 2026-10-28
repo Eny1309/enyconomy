@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
+from array import array
 
 log = logging.getLogger("collector")
 
@@ -59,6 +60,8 @@ CREATE TABLE IF NOT EXISTS deal_stats (cr_id INTEGER, ts INTEGER, weekday INTEGE
 CREATE TABLE IF NOT EXISTS scout (cr_id INTEGER PRIMARY KEY, ts INTEGER, auctions INTEGER, items INTEGER,
                                   deals INTEGER, deal_value INTEGER, flips INTEGER, flip_profit INTEGER,
                                   top TEXT);
+CREATE TABLE IF NOT EXISTS eu_item (item_key TEXT PRIMARY KEY, realms INTEGER, median INTEGER, low INTEGER,
+                                    updated INTEGER);
 CREATE TABLE IF NOT EXISTS decor (item_key TEXT PRIMARY KEY, name TEXT, quality TEXT, subclass_name TEXT,
                                   stackable INTEGER, updated INTEGER);
 """
@@ -267,7 +270,7 @@ def record_deal_stats(cr_id, ids, units):
         con.executemany("INSERT OR IGNORE INTO auction_id (cr_id, id) VALUES (?, ?)", [(cr_id, i) for i in ids])
 
 
-def scout_realm(bz, cr_id, tsm, home):
+def scout_realm(bz, cr_id, tsm, home, eu=None):
     """Eine fremde Realm-Gruppe bewerten: Schnäppchen und Flips zu deinen Realms."""
     data, _ = bz.get(f"/data/wow/connected-realm/{cr_id}/auctions", "dynamic")
     mins, n = {}, 0
@@ -279,6 +282,12 @@ def scout_realm(bz, cr_id, tsm, home):
         key, unit = item_key(a["item"]), buyout // qty
         if key not in mins or unit < mins[key]:
             mins[key] = unit
+    if eu is not None:
+        for key, unit in mins.items():
+            arr = eu.get(key)
+            if arr is None:
+                arr = eu[key] = array("Q")
+            arr.append(unit)
     deals = deal_value = flips = flip_profit = 0
     top = []
     for key, unit in mins.items():
@@ -318,15 +327,27 @@ def scout_all(bz):
             home.setdefault(r["item_key"], []).append(r["min_buyout"])
     todo = [cr for cr in all_crs if cr not in own]
     log.info("Realm-Scout: %d Realm-Gruppen ...", len(todo))
+    # EU-weites Angebot: pro Item der Mindestpreis je Realm-Gruppe (inkl. der eigenen)
+    eu = {}
+    with db() as con:
+        for r in con.execute("SELECT item_key, min_buyout FROM listing"):
+            eu.setdefault(r["item_key"], array("Q")).append(r["min_buyout"])
     for i, cr in enumerate(todo, 1):
         try:
-            f = scout_realm(bz, cr, tsm, home)
+            f = scout_realm(bz, cr, tsm, home, eu)
             log.info("Scout %d/%d: Realm-Gruppe %d - %d Flips", i, len(todo), cr, f)
         except Exception as e:
             log.warning("Scout Realm-Gruppe %d: %s", cr, e)
+    now = int(time.time())
+    rows = []
+    for key, arr in eu.items():
+        vals = sorted(arr)
+        rows.append((key, len(vals), vals[len(vals) // 2], vals[0], now))
     with db() as con:
-        meta_set(con, "scout_updated", int(time.time()))
-    log.info("Realm-Scout fertig")
+        con.execute("DELETE FROM eu_item")
+        con.executemany("INSERT INTO eu_item VALUES (?, ?, ?, ?, ?)", rows)
+        meta_set(con, "scout_updated", now)
+    log.info("Realm-Scout fertig - %d verschiedene Items EU-weit im Angebot", len(rows))
 
 
 # --------------------------------------------------------------------------
@@ -449,6 +470,9 @@ def fill_bulk_meta(bz):
     with db() as con:
         missing = [r["item_key"] for r in con.execute(
             """SELECT t.item_key FROM tsm t LEFT JOIN item i ON i.item_key = t.item_key
+               WHERE i.item_key IS NULL OR i.stackable IS NULL
+               UNION
+               SELECT e.item_key FROM eu_item e LEFT JOIN item i ON i.item_key = e.item_key
                WHERE i.item_key IS NULL OR i.stackable IS NULL""")]
     item_ids = sorted({int(k[2:]) for k in missing if k.startswith("i:")})
     pet_ids = {int(k[2:]) for k in missing if k.startswith("p:")}

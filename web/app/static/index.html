@@ -108,6 +108,9 @@ const FILTERS = {
             { k: "min_sale", label: "Min. Verkaufs-Ø (g)", type: "number", v: 10 }] },
     { row: [{ k: "min_spd", label: "Min. Verkäufe/Tag", type: "number", v: 0, step: 0.01 },
             { k: "max_items", label: "Max. Items (0 = alle)", type: "number", v: 0 }] },
+    { k: "include_eu", label: "Auch Items ohne TSM-Verkäufe, die EU-weit angeboten werden (mit Höchstpreis)", type: "check", v: true },
+    { row: [{ k: "eu_pct", label: "Höchstpreis % vom EU-Median", type: "number", v: 60 },
+            { k: "eu_min_realms", label: "Min. Realms mit Angebot", type: "number", v: 3 }] },
     { k: "with_prices", label: "Höchstpreise in die Liste schreiben (sonst entscheidet PBS per Percentage)", type: "check", v: false },
     { k: "max_pct", label: "Höchstpreis = % vom Verkaufs-Ø (nur mit Häkchen oben)", type: "number", v: 70 },
     { k: "category", label: "Kategorie enthält (leer = alle)", type: "text" },
@@ -198,7 +201,7 @@ const COLS = {
     { k: "quality", t: "Qualität", f: r => `<span class="q-${r.quality}">${QUAL[r.quality] || "-"}</span>` },
     { k: "sale_rate", t: "Rate", num: 1, f: r => fix(r.sale_rate, 3) },
     { k: "sold_per_day", t: "/Tag", num: 1, f: r => fix(r.sold_per_day, 2) },
-    { k: "usual", t: "Verkaufs-Ø", num: 1, f: r => gold(r.usual) },
+    { k: "usual", t: "Verkaufs-Ø", num: 1, f: r => r.eu ? `<span class="o" title="Keine TSM-Verkäufe - EU-Median der Angebote auf ${r.eu_realms} Realms">EU ${gold(r.eu_median)}</span>` : gold(r.usual) },
     { k: "score", t: "Umsatz/Tag", num: 1, f: r => gold(r.score) },
     { k: "max_gold", t: "Höchstpreis", num: 1, f: r => `<span class="g">${r.max_gold.toLocaleString("de-DE")}g</span>` },
   ],
@@ -396,6 +399,7 @@ function render(data) {
   if (tab === "sniper") {
     $("#totals").innerHTML = `<div style="grid-column:1/-1">
       <small>Auktionator-Import (${(data.count || 0).toLocaleString("de-DE")} Items${data.found > data.count ? ` - die besten von ${data.found.toLocaleString("de-DE")} passenden, nach Umsatz/Tag` : ""})
+        ${data.skipped && data.skipped.eu_added ? ` · davon ${data.skipped.eu_added.toLocaleString("de-DE")} ohne TSM-Verkäufe (EU-Angebot, mit Höchstpreis)` : ""}
         ${data.skipped ? ` · Nicht drin: ${data.skipped.commodity.toLocaleString("de-DE")} Waren, ${data.skipped.no_sales.toLocaleString("de-DE")} ohne Verkäufe bei TSM, ${data.skipped.cheap.toLocaleString("de-DE")} unter Min. Verkaufs-Ø, ${data.skipped.low_rate.toLocaleString("de-DE")} unter Min. Verkaufsrate${data.skipped.low_spd ? `, ${data.skipped.low_spd.toLocaleString("de-DE")} unter Min. Verkäufe/Tag` : ""}${data.skipped.no_info ? `, <span class="o">${data.skipped.no_info.toLocaleString("de-DE")} noch ohne Item-Infos</span>` : ""}` : ""}</small>
       <div style="display:flex;gap:8px;margin-top:6px">
         <textarea id="exportBox" readonly style="flex:1;height:60px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px;font-size:12px">${esc(data.export || "")}</textarea>

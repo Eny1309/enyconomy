@@ -37,6 +37,7 @@ _cache = {"stamp": None}
 def load():
     with C.db() as con:
         stamp = (C.meta_get(con, "last_run"), C.meta_get(con, "tsm_updated"), C.meta_get(con, "decor_updated"),
+                 C.meta_get(con, "scout_updated"),
                  con.execute("SELECT COUNT(*) FROM item").fetchone()[0])
         if _cache["stamp"] == stamp:
             return _cache
@@ -55,7 +56,8 @@ def load():
         items = {r["item_key"]: dict(r) for r in con.execute("SELECT * FROM item")}
         snaps = {r["cr_id"]: dict(r) for r in con.execute("SELECT * FROM snapshot")}
         decor = {r["item_key"]: dict(r) for r in con.execute("SELECT * FROM decor")}
-    _cache.update(stamp=stamp, crs=crs, names=names, locales=locales, rtypes=rtypes, listings=listings, tsm=tsm, items=items, snaps=snaps,
+        eu = {r["item_key"]: (r["realms"], r["median"], r["low"]) for r in con.execute("SELECT * FROM eu_item")}
+    _cache.update(eu=eu, stamp=stamp, crs=crs, names=names, locales=locales, rtypes=rtypes, listings=listings, tsm=tsm, items=items, snaps=snaps,
                   decor=decor)
     return _cache
 
@@ -427,6 +429,7 @@ def top(min_sale: float = 10, min_spd: float = 0.1, category: str = "", q: str =
 def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max_items: int = 0,
            max_pct: float = 70, category: str = "", q: str = "",
            quality: str = "", list_name: str = "Enyconomy Sniper", with_prices: bool = False,
+           include_eu: bool = True, eu_pct: float = 60, eu_min_realms: int = 3,
            sort: str = "score", desc: bool = True, offset: int = 0, limit: int = Query(100, le=500)):
     """Sniper-Liste für Auktionator/Point Blank Sniper: alle nicht regionsweit gehandelten Items
     mit ausreichender Verkaufsrate. Höchstpreis = max_pct % des Region-Verkaufs-Ø."""
@@ -435,18 +438,26 @@ def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max
     best = {}
     skipped = {"filter": 0, "commodity": 0, "no_info": 0, "bound": 0,
                "no_sales": 0, "cheap": 0, "low_rate": 0, "low_spd": 0}
-    for key, t in d["tsm"].items():
+    keys = set(d["tsm"]) | (set(d["eu"]) if include_eu else set())
+    skipped["eu_added"] = 0
+    for key in keys:
+        t = d["tsm"].get(key) or {}
         rate, sale = t.get("sale_rate") or 0, t.get("sale_avg") or 0
+        eu_ref = None
         if not t.get("sale_avg"):
-            skipped["filter"] += 1; skipped["no_sales"] += 1   # TSM kennt keine Verkäufe
-            continue
-        if sale < min_sale * 10000:
+            # Keine TSM-Verkäufe: über das EU-weite Angebot aufnehmen (Höchstpreis = eu_pct % des Medians)
+            e = d["eu"].get(key)
+            if not include_eu or not e or e[0] < eu_min_realms or e[1] < min_sale * 10000:
+                skipped["filter"] += 1; skipped["no_sales"] += 1
+                continue
+            eu_ref = e
+        elif sale < min_sale * 10000:
             skipped["filter"] += 1; skipped["cheap"] += 1
             continue
-        if rate < min_rate:
+        if eu_ref is None and rate < min_rate:
             skipped["filter"] += 1; skipped["low_rate"] += 1
             continue
-        if (t.get("sold_per_day") or 0) < min_spd:
+        if eu_ref is None and (t.get("sold_per_day") or 0) < min_spd:
             skipped["filter"] += 1; skipped["low_spd"] += 1
             continue
         meta = d["items"].get(key) or {}
@@ -472,16 +483,22 @@ def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max
         q_ = meta.get("quality") or dec.get("quality")
         if qual and q_ != qual:
             continue
-        maxp = int(sale * max_pct / 100 / 10000)  # in Gold, wie Auktionator es erwartet
+        if eu_ref:
+            maxp = int(eu_ref[1] * eu_pct / 100 / 10000)
+        else:
+            maxp = int(sale * max_pct / 100 / 10000)  # in Gold, wie Auktionator es erwartet
         if maxp < 1:
             continue
         prev = best.get(name)
-        if prev and prev["usual"] >= sale:
+        if prev and (prev["usual"] or 0) >= (sale or 0) and not (prev.get("eu") and not eu_ref):
             continue  # gleicher Name (z. B. mehrere IDs): nur einmal, mit dem höheren Wert
         r = item_info(d, key)
-        r.update(name=name, quality=q_, **{"class": cls, "subclass": sub}, usual=sale, sale_rate=rate,
+        r.update(name=name, quality=q_, **{"class": cls, "subclass": sub}, usual=sale or None, sale_rate=rate or None,
                  sold_per_day=t.get("sold_per_day"), max_gold=maxp,
-                 score=int((t.get("sold_per_day") or 0) * sale))  # erwarteter Umsatz pro Tag
+                 score=int((t.get("sold_per_day") or 0) * sale),  # erwarteter Umsatz pro Tag
+                 eu=bool(eu_ref), eu_median=eu_ref[1] if eu_ref else None, eu_realms=eu_ref[0] if eu_ref else None)
+        if eu_ref:
+            skipped["eu_added"] += 1
         best[name] = r
     total_found = len(best)
     rows = sorted(best.values(), key=lambda r: -r["score"])
@@ -489,10 +506,10 @@ def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max
         rows = rows[:max_items]
     # Ohne Höchstpreis entscheidet Point Blank Sniper selbst (Preisquelle x Percentage, pro Item-Variante).
     # Mit Höchstpreis ignoriert PBS sein Percentage für diesen Eintrag.
-    if with_prices:
-        terms = ['"{}";;0;0;0;0;0;0;0;{};;#;;'.format(r["name"].replace('"', ''), r["max_gold"]) for r in rows]
-    else:
-        terms = ['"{}"'.format(r["name"].replace('"', '')) for r in rows]
+    # Mit TSM-Verkaufsdaten: ohne Preis (PBS-Percentage), außer with_prices.
+    # Ohne TSM-Verkaufsdaten: immer mit Höchstpreis aus dem EU-Median, sonst kann PBS sie nicht bewerten.
+    terms = ['"{}";;0;0;0;0;0;0;0;{};;#;;'.format(r["name"].replace('"', ''), r["max_gold"])
+             if (with_prices or r.get("eu")) else '"{}"'.format(r["name"].replace('"', '')) for r in rows]
     res = page(rows, sort, desc, offset, limit)
     res["export"] = (list_name.replace("^", "") or "Enyconomy Sniper") + "^" + "^".join(terms) if terms else ""
     res["count"] = len(terms)
