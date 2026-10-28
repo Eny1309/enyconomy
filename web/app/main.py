@@ -438,7 +438,7 @@ def top(min_sale: float = 10, min_spd: float = 0.1, category: str = "", q: str =
 @app.get("/api/sniper")
 def sniper(list_name: str = "Enyconomy Sniper",
            min_rate: float = 0, min_sale: float = 0, min_spd: float = 0, category: str = "", quality: str = "",
-           q: str = "", max_items: int = 0, with_prices: bool = False, max_pct: float = 100,
+           q: str = "", max_items: int = 0, with_prices: bool = False, max_pct: float = 100, ref_pct: float = 60,
            sort: str = "score", desc: bool = True, offset: int = 0, limit: int = Query(100, le=500)):
     """Sniper-Liste für Point Blank Sniper: ALLE Items, die einzeln im AH gehandelt werden.
     Keine Vorfilter - die Bewertung macht PBS.
@@ -494,7 +494,7 @@ def sniper(list_name: str = "Enyconomy Sniper",
     for r in rows:
         nm = r["name"].replace('"', '')
         if r["usual"] is None and r["ref"]:
-            terms.append('"{}";;0;0;0;0;0;0;0;{};;#;;'.format(nm, max(1, int(r["ref"] / 10000))))
+            terms.append('"{}";;0;0;0;0;0;0;0;{};;#;;'.format(nm, max(1, int(r["ref"] * ref_pct / 100 / 10000))))
         elif with_prices and r["usual"]:
             terms.append('"{}";;0;0;0;0;0;0;0;{};;#;;'.format(nm, max(1, int(r["usual"] * max_pct / 100 / 10000))))
         else:

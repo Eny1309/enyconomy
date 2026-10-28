@@ -113,6 +113,7 @@ const FILTERS = {
     { k: "quality", label: "Qualität", type: "select", options: [["", "Alle"], ["POOR", "Schlecht"], ["COMMON", "Gewöhnlich"],
         ["UNCOMMON", "Selten"], ["RARE", "Rar"], ["EPIC", "Episch"], ["LEGENDARY", "Legendär"], ["PET", "Haustier"]] },
     { k: "q", label: "Name enthält", type: "text" },
+    { k: "ref_pct", label: "Items ohne TSM-Daten: % vom EU-Höchstpreis (wie PBS-Percentage)", type: "number", v: 60 },
     { k: "with_prices", label: "Auch Items mit TSM-Daten mit Höchstpreis (sonst bewertet PBS per Percentage)", type: "check", v: false },
     { k: "max_pct", label: "… Höchstpreis = % vom Verkaufs-Ø", type: "number", v: 100 },
     { hint: "Alle Items, die einzeln im Auktionshaus gehandelt werden - ohne Vorfilter, die Bewertung macht PBS. Raus sind nur Waren (stapelbar). Items ohne TSM-Verkaufs-Ø bekommen einen Höchstpreis (höchster bekannter Wert), damit PBS sie bewerten kann. Unten kopieren und in Auktionator unter Einkaufen → Importieren einfügen." },
