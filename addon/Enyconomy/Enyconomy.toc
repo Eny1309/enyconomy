@@ -2,7 +2,7 @@
 ## Title: Enyconomy
 ## Notes: Herstellen über alle Realms mit Zielmengen + Einkaufs- und Sammelliste
 ## Author: Eny
-## Version: 1.2
+## Version: 1.2.1
 ## OptionalDeps: TradeSkillMaster, Auctionator
 ## SavedVariables: EnyconomyDB
 

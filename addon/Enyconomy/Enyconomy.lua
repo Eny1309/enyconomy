@@ -99,6 +99,32 @@ local function SnapshotStock()
     c.stock[FactionRealm()] = { time = time(), items = items }
 end
 
+-- Dasselbe in kleinen Portionen über mehrere Frames verteilt (sonst hängt das Spiel bei vielen Rezepten)
+local snapRunning = false
+local function SnapshotStockAsync(done)
+    local c = cfg()
+    if not TSM_API or snapRunning then return end
+    snapRunning = true
+    local ids, items, i = {}, {}, 1
+    for id in pairs(c.recipes) do ids[#ids + 1] = id end
+    local function step()
+        local stop = math.min(i + 24, #ids)
+        for k = i, stop do
+            local have, ah = TsmTotals(ids[k])
+            if have + ah > 0 then items[ids[k]] = have + ah end
+        end
+        i = stop + 1
+        if i <= #ids then
+            C_Timer.After(0, step)
+        else
+            c.stock[FactionRealm()] = { time = time(), items = items }
+            snapRunning = false
+            if done then done() end
+        end
+    end
+    step()
+end
+
 -- Bestand eines hergestellten Items: hier (live) + andere Realms (Momentaufnahme) + Kriegsmeuten-Bank
 local function ItemStock(id)
     local c, here = cfg(), FactionRealm()
@@ -485,7 +511,7 @@ local function CreateWindow()
     refresh:SetSize(100, 22)
     refresh:SetPoint("TOPRIGHT", -14, -28)
     refresh:SetText("Aktualisieren")
-    refresh:SetScript("OnClick", function() SnapshotStock(); ApplyFilter() end)
+    refresh:SetScript("OnClick", function() SnapshotStockAsync(ApplyFilter) end)
 
     local line = win:CreateTexture(nil, "ARTWORK")
     line:SetColorTexture(1, 0.82, 0, 0.4)
@@ -814,10 +840,12 @@ f:RegisterEvent("MAIL_CLOSED")
 f:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_LOGIN" then
         cfg()
-        C_Timer.After(10, SnapshotStock)
+        C_Timer.After(10, function() SnapshotStockAsync() end)
         C_Timer.After(5, function() ImportSniperList(false) end)
-    elseif event == "PLAYER_LOGOUT" or event == "AUCTION_HOUSE_CLOSED" or event == "MAIL_CLOSED" then
-        SnapshotStock()
+    elseif event == "PLAYER_LOGOUT" then
+        SnapshotStock()  -- beim Ausloggen muss es sofort fertig sein
+    elseif event == "AUCTION_HOUSE_CLOSED" or event == "MAIL_CLOSED" then
+        SnapshotStockAsync()
     elseif event == "TRADE_SKILL_SHOW" then
         C_Timer.After(1.5, CaptureRecipes)
     elseif event == "BAG_UPDATE_DELAYED" then
