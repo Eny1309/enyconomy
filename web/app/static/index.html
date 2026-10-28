@@ -477,6 +477,10 @@ async function loadStatus() {
   $("#content").innerHTML = `<div class="status-grid">
     <div class="card"><h3>Letzter Lauf</h3>vor ${ago(+s.last_run)} ${s.running ? '· <span class="o">läuft gerade</span>' : ""}<br>
       <span class="hint">Automatisch alle ${s.scan_minutes} min</span></div>
+    <div class="card"><h3>Realm-Scout</h3>${s.scout_running
+        ? `<span class="o">${s.scout_running === "names" ? "Holt Namen der neuen Items ..." : "Läuft gerade ..."}</span>`
+        : s.scout_updated ? `<span class="g">Fertig</span> vor ${ago(+s.scout_updated)}` : "Noch nie gelaufen"}<br>
+      <span class="hint">${(s.scouted || 0).toLocaleString("de-DE")} Realm-Verbünde · ${(s.eu_items || 0).toLocaleString("de-DE")} Items EU-weit im Angebot${s.eu_no_names ? ` · <span class="o">${s.eu_no_names.toLocaleString("de-DE")} noch ohne Namen</span>` : ""}</span></div>
     <div class="card"><h3>TSM-Daten</h3>vor ${ago(+s.tsm_updated)} · ${s.tsm_items.toLocaleString("de-DE")} Items</div>
     <div class="card"><h3>Item-Infos</h3>${s.items_meta.toLocaleString("de-DE")} Items mit Namen<br>
       <span class="hint">${(s.decor_items || 0).toLocaleString("de-DE")} Deko-Items bekannt</span></div>
@@ -490,7 +494,8 @@ async function header() {
   try {
     const s = await (await fetch("/api/status")).json();
     $("#meta").textContent = `Letzter Lauf vor ${ago(+s.last_run)} · ${s.realms.length} Realm-Gruppen · TSM vor ${ago(+s.tsm_updated)}`
-      + (s.running ? " · Scan läuft ..." : "");
+      + (s.running ? " · Scan läuft ..." : "")
+      + (s.scout_running ? (s.scout_running === "names" ? " · Scout: Namen ..." : " · Scout läuft ...") : "");
     $("#scanBtn").disabled = s.running;
   } catch (e) { $("#meta").textContent = "Server nicht erreichbar"; }
 }

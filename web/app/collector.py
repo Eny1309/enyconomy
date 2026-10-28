@@ -656,6 +656,8 @@ class Collector:
                 self.scouting = True
                 try:
                     scout_all(self.bz)
+                    self.scouting = "names"
+                    fill_bulk_meta(self.bz)  # Namen der neu entdeckten Items gleich nachholen
                 except Exception as e:
                     log.exception("Realm-Scout: %s", e)
                 finally:

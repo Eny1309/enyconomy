@@ -117,7 +117,16 @@ def status():
     with C.db() as con:
         tsm_updated = C.meta_get(con, "tsm_updated")
         last_run = C.meta_get(con, "last_run")
-    return {"realms": realms, "tsm_updated": tsm_updated, "last_run": last_run, "decor_items": len(d["decor"]),
+    with C.db() as con:
+        scout_updated = C.meta_get(con, "scout_updated")
+        eu_items = con.execute("SELECT COUNT(*) FROM eu_item").fetchone()[0]
+        scouted = con.execute("SELECT COUNT(*) FROM scout").fetchone()[0]
+        no_names = con.execute("""SELECT COUNT(*) FROM eu_item e LEFT JOIN item i ON i.item_key = e.item_key
+                                  WHERE i.item_key IS NULL""").fetchone()[0]
+    scouting = col.scouting if col else False
+    return {"scout_updated": scout_updated, "scout_running": scouting, "eu_items": eu_items, "scouted": scouted,
+            "eu_no_names": no_names,
+            "realms": realms, "tsm_updated": tsm_updated, "last_run": last_run, "decor_items": len(d["decor"]),
             "running": bool(col and col.running), "last_error": col.last_error if col else None,
             "tsm_items": len(d["tsm"]), "items_meta": len(d["items"]),
             "scan_minutes": C.SCAN_MINUTES, "now": int(time.time())}
