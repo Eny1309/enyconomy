@@ -510,6 +510,33 @@ def sniper(list_name: str = "Enyconomy Sniper",
     return res
 
 
+@app.get("/api/realmprices.lua")
+def realmprices_lua():
+    """Günstigster Preis je Item auf deinen Realms (aus REALMS) als RealmPrices.lua fürs Addon-Tooltip."""
+    d = load()
+    crs = d["crs"]
+    def lua(v):
+        return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    out = ["-- Erzeugt von Enyconomy Web. In Interface/AddOns/Enyconomy/ ersetzen, dann /reload.",
+           "EnyconomyRealmData = {", "  created = %d," % int(time.time()), "  realms = {"]
+    for cr in crs:
+        snap = d["snaps"].get(cr, {})
+        out.append("    { name = %s, members = { %s }, fetched = %d }," % (
+            lua(realm_short(d, cr)), ", ".join(lua(n) for n in sorted(d["names"].get(cr, []))),
+            snap.get("fetched_at") or 0))
+    out.append("  },")
+    out.append("  items = {")
+    for key, per in d["listings"].items():
+        kind, num = key.split(":")
+        if kind != "i":
+            continue
+        vals = ",".join("%d:%d" % (per[cr][0] // 10000 if per[cr][0] >= 10000 else 0, per[cr][1]) if cr in per else "" for cr in crs)
+        out.append("    [%s] = %s," % (num, lua(vals)))
+    out += ["  },", "}", ""]
+    return Response("\n".join(out), media_type="text/plain; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="RealmPrices.lua"'})
+
+
 @app.get("/api/sniper.lua")
 def sniper_lua(list_name: str = "Enyconomy Sniper",
                min_rate: float = 0, min_sale: float = 0, min_spd: float = 0, category: str = "", quality: str = "",

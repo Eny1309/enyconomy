@@ -429,9 +429,10 @@ function render(data) {
       <div style="display:flex;gap:8px;margin-top:6px">
         <textarea id="exportBox" readonly style="flex:1;height:60px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px;font-size:12px">${esc(data.export || "")}</textarea>
         <div style="display:flex;flex-direction:column;gap:6px"><button class="btn" id="copyExport">Kopieren</button>
-        <a class="btn" id="dlLua" href="api/sniper.lua?${new URLSearchParams(readFilters())}" download="SniperList.lua">Fürs Addon</a></div>
+        <a class="btn" id="dlLua" href="api/sniper.lua?${new URLSearchParams(readFilters())}" download="SniperList.lua">Fürs Addon</a>
+        <a class="btn" href="api/realmprices.lua" download="RealmPrices.lua" title="Preise deiner Realms für den Tooltip im Spiel">Realm-Preise</a></div>
       </div>
-      <small style="display:block;margin-top:4px">Große Liste? „Fürs Addon“ laden, Datei nach Interface/AddOns/Enyconomy/ kopieren (ersetzen), im Spiel /reload. Die Liste wird dann automatisch in Auktionator angelegt.</small>
+      <small style="display:block;margin-top:4px">Große Liste? „Fürs Addon“ laden, Datei nach Interface/AddOns/Enyconomy/ kopieren (ersetzen), im Spiel /reload. Die Liste wird dann automatisch in Auktionator angelegt. „Realm-Preise“ genauso (RealmPrices.lua): zeigt im Tooltip die Preise auf deinen Realms.</small>
       <small style="display:block;margin-top:10px">TSM-Gruppenimport (Gruppen → Import/Export → Items importieren)</small>
       <div style="display:flex;gap:8px;margin-top:6px">
         <textarea id="tsmBox" readonly style="flex:1;height:44px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px;font-size:12px">${esc(data.tsm_export || "")}</textarea>
