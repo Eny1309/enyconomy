@@ -71,14 +71,10 @@ def realm_label(d, cr):
 
 
 def tradable(meta):
-    """Seelengebundenes und Questitems raus. Ohne Metadaten: vorerst ausblenden."""
-    if not meta or not meta.get("ok"):
-        return False
-    if meta.get("binding") in ("ON_ACQUIRE", "QUEST"):
-        return False
-    if meta.get("class_id") == 12:  # Quest
-        return False
-    return True
+    """Nur prüfen, ob Item-Infos da sind.
+    Die Bindung aus den Blizzard-Daten gilt für die Grundversion eines Items. Varianten (Bonus-IDs)
+    können handelbar sein - und alles, was im AH angeboten wird oder laut TSM verkauft wurde, ist es."""
+    return bool(meta and meta.get("ok"))
 
 
 def item_info(d, key):
@@ -268,8 +264,6 @@ def decor_missing(min_sale: float = 300, min_rate: float = 0, min_spd: float = 0
         if (t.get("sale_rate") or 0) < min_rate or (t.get("sold_per_day") or 0) < min_spd:
             continue
         meta = d["items"].get(key) or {}
-        if meta.get("binding") == "ON_ACQUIRE":
-            continue
         name = meta.get("name") or dec.get("name") or key
         if ql and ql not in name.lower():
             continue
@@ -406,8 +400,6 @@ def top(min_sale: float = 10, min_spd: float = 0.1, category: str = "", q: str =
                           meta.get("subclass_name"), meta.get("binding"))
     rows = []
     for key, (name, quality, cls, sub, binding) in cands.items():
-        if binding in ("ON_ACQUIRE", "QUEST"):
-            continue
         t = d["tsm"].get(key)
         if not t:
             continue
@@ -467,9 +459,6 @@ def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max
             stack = dec.get("stackable")
         if stack:
             skipped["commodity"] += 1  # Waren (regionsweit) raus
-            continue
-        if meta.get("binding") in ("ON_ACQUIRE", "QUEST") or meta.get("class_id") == 12:
-            skipped["bound"] += 1
             continue
         name = meta.get("name") or dec.get("name")
         if not name:
