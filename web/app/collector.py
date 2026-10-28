@@ -743,7 +743,7 @@ class Collector:
             self.wake.clear()
 
     def scout_loop(self):
-        time.sleep(300)  # erst den normalen Lauf durchlassen
+        self.scout_wake.wait(300)  # erst den normalen Lauf durchlassen (Knopf startet sofort)
         while True:
             with db() as con:
                 last = int(meta_get(con, "scout_updated", 0))
