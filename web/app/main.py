@@ -612,6 +612,13 @@ def item(key: str, cr: int = 0):
         r.update(name=dec["name"], quality=dec.get("quality"), **{"class": "Behausung", "subclass": dec.get("subclass_name")})
     r["tsm"] = d["tsm"].get(key)
     own = set(d["crs"])
+    live_ts, live_err = None, None
+    if cr and cr not in own:  # fremder Realm: Auktionen live holen (stündlich gecacht)
+        try:
+            bz = col.bz if col else C.Blizzard(os.environ["BLIZZARD_CLIENT_ID"], os.environ["BLIZZARD_CLIENT_SECRET"])
+            live_ts = C.live_realm(bz, cr)
+        except Exception as e:
+            live_err = str(e)
     with C.db() as con:
         per = {row["cr_id"]: (row["min_buyout"], row["qty"], row["n"]) for row in
                con.execute("SELECT cr_id, min_buyout, qty, n FROM eu_listing WHERE item_key=?", (key,))}
@@ -633,7 +640,9 @@ def item(key: str, cr: int = 0):
                        "rtype": ", ".join(sorted({t for t in d["rtypes"].get(c, []) if t})),
                        "min": price, "qty": qty, "n": n})
     realms.sort(key=lambda x: x["min"])
-    r.update(realms=realms, cr=cr, listings=points, history=hist, scout_updated=scout_updated,
+    all_realms = sorted(({"cr_id": c, "name": realm_full(d, c)} for c in d["names"] if c not in own),
+                        key=lambda x: x["name"].lower())
+    r.update(realms=realms, cr=cr, listings=points, live_ts=live_ts, live_err=live_err, all_realms=all_realms, history=hist, scout_updated=scout_updated,
              eu_qty=sum(x["qty"] for x in realms), eu_realms=len(realms),
              own_realms=[{"cr_id": c, "name": realm_short(d, c)} for c in d["crs"]])
     return r

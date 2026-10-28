@@ -84,6 +84,7 @@ tr:hover td { background: #161a24; }
 .mtable { max-height: 360px; overflow: auto; }
 .mtable td, .mtable th { padding: 6px 10px; font-size: 13px; }
 .mtable tr.own td { background: rgba(245,197,66,.12); }
+.mtable tr.sel td { box-shadow: inset 0 1px var(--accent2), inset 0 -1px var(--accent2); }
 .mside th, .mside td { padding: 7px 12px; font-size: 13px; }
 .mside tr.best td { background: rgba(245,197,66,.12); }
 .pop { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; color: #111; }
@@ -517,7 +518,8 @@ async function openItem(key, cr) {
       ${d.icon ? `<img src="${d.icon}">` : ""}
       <div style="flex:1"><h2 class="q-${d.quality}">${esc(d.name)}</h2>
         <div class="sub">#${d.id}${d.level ? " · iLvl " + d.level : ""}${d.class ? " · " + esc(d.class) : ""}${d.subclass ? " / " + esc(d.subclass) : ""} · <a href="${link}" target="_blank" rel="noopener" style="color:var(--muted)">wowhead ↗</a></div></div>
-      <select id="mRealm">${d.own_realms.map(o => `<option value="${o.cr_id}" ${o.cr_id === d.cr ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</select>
+      <select id="mRealm" style="max-width:280px"><optgroup label="Deine Realms">${d.own_realms.map(o => `<option value="${o.cr_id}" ${o.cr_id === d.cr ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</optgroup>
+        <optgroup label="Alle EU-Realms">${d.all_realms.map(o => `<option value="${o.cr_id}" ${o.cr_id === d.cr ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</optgroup></select>
       <div class="avail"><b>${d.eu_qty.toLocaleString("de-DE")}</b><small>verfügbar EU · ${d.eu_realms} Realm-Gruppen</small></div>
       <button class="btn" id="mClose">Schließen</button>
     </div>
@@ -535,20 +537,23 @@ async function openItem(key, cr) {
         <div class="mcard"><h4>Aktuelle Preise · EU-Realms</h4>
           <div class="hint">Günstigster Preis je Realm-Gruppe, sortiert. Deine Realms gelb. Fremde Realms vom letzten Realm-Scout${d.scout_updated ? " (" + new Date(d.scout_updated * 1000).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) + ")" : " - noch nicht gelaufen"}, deine stündlich.</div>
           ${d.realms.length ? barsSvg(d.realms) + `<div class="mtable"><table><thead><tr><th>Realm</th><th>Sprache</th><th>Bevölkerung</th><th class="num">Preis</th><th class="num">Menge</th><th class="num">Angebote</th></tr></thead><tbody>
-          ${d.realms.map(x => `<tr class="${x.own ? "own" : ""}"><td style="white-space:normal">${x.own && x.short !== x.name ? "<b>" + esc(x.short) + "</b> · " + esc(x.name) : x.own ? "<b>" + esc(x.name) + "</b>" : esc(x.name)}</td><td>${esc(x.lang)}</td>
+          ${d.realms.map(x => `<tr class="${x.own ? "own" : ""} ${x.cr_id === d.cr ? "sel" : ""}" data-cr="${x.cr_id}" style="cursor:pointer" title="Angebote dieses Realms anzeigen"><td style="white-space:normal">${x.own && x.short !== x.name ? "<b>" + esc(x.short) + "</b> · " + esc(x.name) : x.own ? "<b>" + esc(x.name) + "</b>" : esc(x.name)}</td><td>${esc(x.lang)}</td>
             <td>${x.pop ? `<span class="pop pop-${x.pop}">${POP[x.pop] || x.pop}</span>` : "-"}</td><td class="num">${gold(x.min)}</td><td class="num">${x.qty}</td><td class="num">${x.n}</td></tr>`).join("")}
           </tbody></table></div>` : `<div class="empty">Gerade nirgends in der EU angeboten${t.sale_avg ? "" : " (oder eine Ware - die laufen über das regionsweite AH und sind hier nicht drin)"}.</div>`}
         </div>
       </div>
       <div class="mside">
-        <table><thead><tr><th>Angebote · ${esc((d.own_realms.find(o => o.cr_id === d.cr) || {}).name || "")}</th><th class="num">Menge</th></tr></thead><tbody>
+        <table><thead><tr><th style="white-space:normal">Angebote · ${esc((d.own_realms.find(o => o.cr_id === d.cr) || d.all_realms.find(o => o.cr_id === d.cr) || {}).name || "")}
+          ${d.live_ts ? `<div class="hint" style="text-transform:none;letter-spacing:0">Stand ${new Date(d.live_ts * 1000).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}</div>` : ""}</th><th class="num">Menge</th></tr></thead><tbody>
         ${d.listings.length ? d.listings.map(p => `<tr class="${p === d.listings[0] ? "best" : ""}"><td>${gold(p.unit)}</td><td class="num">${p.qty}${p.n > 1 ? ` <span class="hint">(${p.n})</span>` : ""}</td></tr>`).join("")
-          : `<tr><td colspan="2" class="hint">${sel ? "Einzelangebote kommen mit dem nächsten stündlichen Scan." : "Keine Angebote."}</td></tr>`}
+          : `<tr><td colspan="2" class="hint">${d.live_err ? "Fehler beim Laden: " + esc(d.live_err) : sel && !d.live_ts ? "Einzelangebote kommen mit dem nächsten stündlichen Scan." : "Keine Angebote."}</td></tr>`}
         </tbody></table>
       </div>
     </div></div>`;
   $("#mClose").onclick = closeItem;
-  $("#mRealm").onchange = e => openItem(key, +e.target.value);
+  const pick = cr => { $("#mRealm").disabled = true; $(".mside").innerHTML = `<div class="empty">Lade Auktionen dieses Realms ...<br><small>fremde Realms beim ersten Mal ein paar Sekunden</small></div>`; openItem(key, cr); };
+  $("#mRealm").onchange = e => pick(+e.target.value);
+  document.querySelectorAll(".mtable tr[data-cr]").forEach(tr => tr.onclick = () => pick(+tr.dataset.cr));
 }
 function closeItem() { $("#modal").classList.remove("on"); $("#modal").innerHTML = ""; }
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeItem(); });

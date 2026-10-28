@@ -352,6 +352,57 @@ def scout_realm(bz, cr_id, tsm, home, eu=None, euq=None):
     return flips
 
 
+_live_locks = {}
+
+
+def live_realm(bz, cr_id, max_age=3600):
+    """Auktionen einer fremden Realm-Gruppe bei Bedarf holen (Item-Detail): Einzelangebote + Mindestpreise.
+    Bleibt max_age Sekunden gültig. Einzelangebote fremder Realms werden nach einem Tag wieder gelöscht."""
+    lock = _live_locks.setdefault(cr_id, threading.Lock())
+    with lock:
+        with db() as con:
+            ts = int(meta_get(con, f"live:{cr_id}", 0))
+        if time.time() - ts < max_age:
+            return ts
+        data, _ = bz.get(f"/data/wow/connected-realm/{cr_id}/auctions", "dynamic")
+        agg, points = {}, {}
+        for a in (data or {}).get("auctions", []):
+            buyout, qty = a.get("buyout"), a.get("quantity") or 1
+            if not buyout or "item" not in a:
+                continue
+            key, unit = item_key(a["item"]), buyout // qty
+            pp = points.get((key, unit))
+            if pp is None:
+                points[(key, unit)] = [qty, 1]
+            else:
+                pp[0] += qty
+                pp[1] += 1
+            e = agg.get(key)
+            if e is None:
+                agg[key] = [unit, qty, 1]
+            else:
+                e[0] = min(e[0], unit)
+                e[1] += qty
+                e[2] += 1
+        now = int(time.time())
+        with db() as con:
+            con.execute("DELETE FROM price_point WHERE cr_id=?", (cr_id,))
+            con.executemany("INSERT INTO price_point (cr_id, item_key, unit, qty, n) VALUES (?, ?, ?, ?, ?)",
+                            [(cr_id, k, u, v[0], v[1]) for (k, u), v in points.items()])
+            con.execute("DELETE FROM eu_listing WHERE cr_id=?", (cr_id,))
+            con.executemany("INSERT INTO eu_listing (item_key, cr_id, min_buyout, qty, n) VALUES (?, ?, ?, ?, ?)",
+                            [(k, cr_id, v[0], v[1], v[2]) for k, v in agg.items()])
+            meta_set(con, f"live:{cr_id}", now)
+            own = set(tracked_cr_ids())
+            for r in con.execute("SELECT k, v FROM meta WHERE k LIKE 'live:%'").fetchall():
+                old = int(r["k"].split(":")[1])
+                if old not in own and now - int(r["v"]) > 86400:
+                    con.execute("DELETE FROM price_point WHERE cr_id=?", (old,))
+                    con.execute("DELETE FROM meta WHERE k=?", (r["k"],))
+        log.info("Realm-Gruppe %d live geholt: %d Items", cr_id, len(agg))
+        return now
+
+
 def scout_all(bz):
     """Alle Realm-Gruppen der Region einmal durchgehen (die eigenen ausgenommen)."""
     own = set(tracked_cr_ids())
