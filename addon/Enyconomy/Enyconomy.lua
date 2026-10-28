@@ -720,6 +720,26 @@ MakeAuctionatorList = function()
     end
 end
 
+-- Sniper-Liste aus SniperList.lua (vom Dashboard) in Auktionator anlegen
+local function ImportSniperList(force)
+    local data = EnyconomySniperData
+    if not (data and data.terms and #data.terms > 0) then
+        if force then out("Keine Sniper-Liste gefunden. SniperList.lua aus dem Dashboard ins Addon-Verzeichnis kopieren, dann /reload.") end
+        return
+    end
+    if not force and cfg().sniperCreated == data.created then return end
+    if not (Auctionator and Auctionator.API and Auctionator.API.v1 and Auctionator.API.v1.CreateShoppingList) then
+        return out("Auktionator ist nicht geladen.")
+    end
+    local ok, err = pcall(Auctionator.API.v1.CreateShoppingList, "Enyconomy", data.name or "Enyconomy Sniper", data.terms)
+    if ok then
+        cfg().sniperCreated = data.created
+        out(string.format("Auktionator-Liste '%s' mit %d Einträgen angelegt.", data.name or "Enyconomy Sniper", #data.terms))
+    else
+        out("Auktionator-Fehler: " .. tostring(err))
+    end
+end
+
 local function OpenWindow(mode)
     if not win then CreateWindow() end
     win:Show()
@@ -749,6 +769,7 @@ f:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_LOGIN" then
         cfg()
         C_Timer.After(10, SnapshotStock)
+        C_Timer.After(5, function() ImportSniperList(false) end)
     elseif event == "PLAYER_LOGOUT" or event == "AUCTION_HOUSE_CLOSED" or event == "MAIL_CLOSED" then
         SnapshotStock()
     elseif event == "TRADE_SKILL_SHOW" then
@@ -767,6 +788,8 @@ SlashCmdList.ENYCONOMY = function(msg)
         OpenWindow("shop")
     elseif cmd == "craft" or cmd == "herstellen" then
         OpenWindow("craft")
+    elseif cmd == "sniper" then
+        ImportSniperList(true)
     elseif cmd == "resetrecipes" then
         cfg().recipes = {}
         out("Rezeptliste geleert - Berufsfenster neu öffnen.")

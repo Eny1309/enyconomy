@@ -4,7 +4,7 @@ import os
 import time
 
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from . import collector as C
 
@@ -506,6 +506,25 @@ def sniper(list_name: str = "Enyconomy Sniper",
     res["tsm_export"] = ",".join(r["key"] for r in rows)
     res["skipped"] = skipped
     return res
+
+
+@app.get("/api/sniper.lua")
+def sniper_lua(list_name: str = "Enyconomy Sniper",
+               min_rate: float = 0, min_sale: float = 0, min_spd: float = 0, category: str = "", quality: str = "",
+               q: str = "", max_items: int = 0, with_prices: bool = False, max_pct: float = 100, ref_pct: float = 60):
+    """Dieselbe Liste als SniperList.lua für das Enyconomy-Addon (statt Einfügen, das bei großen Listen einfriert)."""
+    res = sniper(list_name=list_name, min_rate=min_rate, min_sale=min_sale, min_spd=min_spd, category=category,
+                 quality=quality, q=q, max_items=max_items, with_prices=with_prices, max_pct=max_pct,
+                 ref_pct=ref_pct, sort="score", desc=True, offset=0, limit=1)
+    def lua(v):
+        return '"' + v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ") + '"'
+    parts = res["export"].split("^") if res["export"] else [list_name]
+    out = ["-- Erzeugt von Enyconomy Web. In Interface/AddOns/Enyconomy/ ersetzen, dann /reload.",
+           "EnyconomySniperData = {", "  name = %s," % lua(parts[0]), "  created = %d," % int(time.time()), "  terms = {"]
+    out += ["    %s," % lua(t) for t in parts[1:]]
+    out += ["  },", "}", ""]
+    return Response("\n".join(out), media_type="text/plain; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="SniperList.lua"'})
 
 
 @app.get("/api/timing")
