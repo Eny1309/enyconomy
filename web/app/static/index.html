@@ -104,21 +104,8 @@ let tab = "flips", realms = [], state = { offset: 0, limit: 50, sort: "profit", 
 const FILTERS = {
   sniper: [
     { k: "list_name", label: "Listenname", type: "text", v: "Enyconomy Sniper" },
-    { row: [{ k: "min_rate", label: "Min. Verkaufsrate", type: "number", v: 0.01, step: 0.01 },
-            { k: "min_sale", label: "Min. Verkaufs-Ø (g)", type: "number", v: 10 }] },
-    { row: [{ k: "min_spd", label: "Min. Verkäufe/Tag", type: "number", v: 0, step: 0.01 },
-            { k: "max_items", label: "Max. Items (0 = alle)", type: "number", v: 0 }] },
-    { k: "include_eu", label: "Auch Items ohne TSM-Verkäufe, die EU-weit angeboten werden (Höchstpreis = höchster bekannter Wert)", type: "check", v: true },
-    { row: [{ k: "eu_pct", label: "Höchstpreis % der Referenz", type: "number", v: 100 },
-            { k: "eu_min_realms", label: "Min. Realms mit Angebot", type: "number", v: 1 }] },
-    { k: "with_prices", label: "Höchstpreise in die Liste schreiben (sonst entscheidet PBS per Percentage)", type: "check", v: false },
-    { k: "max_pct", label: "Höchstpreis = % vom Verkaufs-Ø (nur mit Häkchen oben)", type: "number", v: 70 },
-    { k: "category", label: "Kategorie enthält (leer = alle)", type: "text" },
-    { k: "quality", label: "Qualität", type: "select", options: [["", "Alle"], ["POOR", "Schlecht"], ["COMMON", "Gewöhnlich"],
-        ["UNCOMMON", "Selten"], ["RARE", "Rar"], ["EPIC", "Episch"], ["LEGENDARY", "Legendär"], ["PET", "Haustier"]] },
-    { k: "q", label: "Name enthält", type: "text" },
-    { hint: "Alle Items, die pro Realm gehandelt werden (keine Waren), mit Verkaufsrate ab dem Grenzwert. Ohne Höchstpreise nutzt Point Blank Sniper seine Preisquelle × Percentage - das ist genauer, weil es pro Item-Variante rechnet. Unten kopieren und in Auktionator unter Einkaufen → Importieren einfügen." },
-  ],
+    { hint: "Alle Items, die einzeln im Auktionshaus gehandelt werden - ohne Vorfilter, die Bewertung macht PBS. Raus sind nur Waren (stapelbar). Items ohne TSM-Verkaufs-Ø bekommen einen Höchstpreis (höchster bekannter Wert), damit PBS sie bewerten kann. Unten kopieren und in Auktionator unter Einkaufen → Importieren einfügen." },
+  ]
   top: [
     { k: "q", label: "Item-Name enthält", type: "text" },
     { row: [{ k: "min_sale", label: "Min. Verkaufs-Ø (g)", type: "number", v: 10 },
@@ -199,12 +186,11 @@ const COLS = {
   sniper: [
     { k: "name", t: "Item", f: itemCell },
     { k: "quality", t: "Qualität", f: r => `<span class="q-${r.quality}">${QUAL[r.quality] || "-"}</span>` },
+    { k: "usual", t: "Verkaufs-Ø", num: 1, f: r => r.usual ? gold(r.usual) : r.ref ? `<span class="o" title="Keine TSM-Verkäufe - Höchstpreis in der Liste">Höchstpreis ${gold(r.ref)}</span>` : "-" },
     { k: "sale_rate", t: "Rate", num: 1, f: r => fix(r.sale_rate, 3) },
     { k: "sold_per_day", t: "/Tag", num: 1, f: r => fix(r.sold_per_day, 2) },
-    { k: "usual", t: "Verkaufs-Ø", num: 1, f: r => r.eu ? `<span class="o" title="Keine TSM-Verkäufe - Referenz = höchster Wert aus teuerstem Realm-Angebot, TSM-Marktwert und TSM-Historisch (${r.eu_realms} Realms mit Angebot)">Ref. ${gold(r.eu_median)}</span>` : gold(r.usual) },
-    { k: "score", t: "Umsatz/Tag", num: 1, f: r => gold(r.score) },
-    { k: "max_gold", t: "Höchstpreis", num: 1, f: r => `<span class="g">${r.max_gold.toLocaleString("de-DE")}g</span>` },
-  ],
+    { k: "eu_realms", t: "EU-Realms", num: 1 },
+  ]
   niches: [
     { k: "category", t: "Kategorie", f: r => `<b>${esc(r.category)}</b><div class="sub">${esc(r.subclass)}</div>` },
     { k: "items", t: "Items", num: 1 },
@@ -398,9 +384,8 @@ function render(data) {
   $("#next").onclick = () => { state.offset += state.limit; load(); };
   if (tab === "sniper") {
     $("#totals").innerHTML = `<div style="grid-column:1/-1">
-      <small>Auktionator-Import (${(data.count || 0).toLocaleString("de-DE")} Items${data.found > data.count ? ` - die besten von ${data.found.toLocaleString("de-DE")} passenden, nach Umsatz/Tag` : ""})
-        ${data.skipped && data.skipped.eu_added ? ` · davon ${data.skipped.eu_added.toLocaleString("de-DE")} ohne TSM-Verkäufe (EU-Angebot, mit Höchstpreis)` : ""}
-        ${data.skipped ? ` · Nicht drin: ${data.skipped.commodity.toLocaleString("de-DE")} Waren, ${data.skipped.no_sales.toLocaleString("de-DE")} ohne Verkäufe bei TSM, ${data.skipped.cheap.toLocaleString("de-DE")} unter Min. Verkaufs-Ø, ${data.skipped.low_rate.toLocaleString("de-DE")} unter Min. Verkaufsrate${data.skipped.low_spd ? `, ${data.skipped.low_spd.toLocaleString("de-DE")} unter Min. Verkäufe/Tag` : ""}${data.skipped.no_info ? `, <span class="o">${data.skipped.no_info.toLocaleString("de-DE")} noch ohne Item-Infos</span>` : ""}` : ""}</small>
+      <small>Auktionator-Import (${(data.count || 0).toLocaleString("de-DE")} Items, davon ${(data.with_ref || 0).toLocaleString("de-DE")} mit Höchstpreis)
+        ${data.skipped ? ` · Nicht drin: ${data.skipped.commodity.toLocaleString("de-DE")} Waren${data.skipped.no_name ? `, <span class="o">${data.skipped.no_name.toLocaleString("de-DE")} noch ohne Namen</span>` : ""}` : ""}</small>
       <div style="display:flex;gap:8px;margin-top:6px">
         <textarea id="exportBox" readonly style="flex:1;height:60px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px;font-size:12px">${esc(data.export || "")}</textarea>
         <button class="btn" id="copyExport">Kopieren</button>

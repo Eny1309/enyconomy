@@ -436,99 +436,57 @@ def top(min_sale: float = 10, min_spd: float = 0.1, category: str = "", q: str =
 
 
 @app.get("/api/sniper")
-def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max_items: int = 0,
-           max_pct: float = 70, category: str = "", q: str = "",
-           quality: str = "", list_name: str = "Enyconomy Sniper", with_prices: bool = False,
-           include_eu: bool = True, eu_pct: float = 100, eu_min_realms: int = 1,
+def sniper(list_name: str = "Enyconomy Sniper",
            sort: str = "score", desc: bool = True, offset: int = 0, limit: int = Query(100, le=500)):
-    """Sniper-Liste für Auktionator/Point Blank Sniper: alle nicht regionsweit gehandelten Items
-    mit ausreichender Verkaufsrate. Höchstpreis = max_pct % des Region-Verkaufs-Ø."""
+    """Sniper-Liste für Point Blank Sniper: ALLE Items, die einzeln im AH gehandelt werden.
+    Keine Vorfilter - die Bewertung macht PBS.
+    Quellen: alles mit TSM-Daten + alles, was der Scout EU-weit im Angebot gesehen hat.
+    Raus nur: Waren (stapelbar, regionsweit) und Items ohne Namen.
+    Ohne TSM-Verkaufs-Ø bekommt ein Eintrag einen Höchstpreis (höchster bekannter Wert),
+    sonst könnte PBS ihn mit DBRegionSaleAvg nicht bewerten."""
     d = load()
-    cat, ql, qual = category.strip().lower(), q.strip().lower(), quality.strip().upper()
+    skipped = {"commodity": 0, "no_name": 0}
     best = {}
-    skipped = {"filter": 0, "commodity": 0, "no_info": 0, "bound": 0,
-               "no_sales": 0, "cheap": 0, "low_rate": 0, "low_spd": 0}
-    keys = set(d["tsm"]) | (set(d["eu"]) if include_eu else set())
-    skipped["eu_added"] = 0
-    for key in keys:
+    for key in set(d["tsm"]) | set(d["eu"]) | set(d["listings"]):
         t = d["tsm"].get(key) or {}
-        rate, sale = t.get("sale_rate") or 0, t.get("sale_avg") or 0
-        eu_ref = None
-        if not t.get("sale_avg"):
-            # Keine TSM-Verkäufe: über das EU-weite Angebot aufnehmen (Höchstpreis = eu_pct % des Medians)
-            e = d["eu"].get(key)
-            # Referenz = höchster bekannter Wert, damit ein einzelnes Billig-Angebot (der Snipe selbst)
-            # den Höchstpreis nicht nach unten zieht: teuerstes Realm-Minimum, TSM-Marktwert, TSM-Historisch
-            ref = max(e[3] if e else 0, t.get("market") or 0, t.get("historical") or 0)
-            if not include_eu or not e or e[0] < eu_min_realms or ref < min_sale * 10000:
-                skipped["filter"] += 1; skipped["no_sales"] += 1
-                continue
-            eu_ref = (e[0], ref)
-        elif sale < min_sale * 10000:
-            skipped["filter"] += 1; skipped["cheap"] += 1
-            continue
-        if eu_ref is None and rate < min_rate:
-            skipped["filter"] += 1; skipped["low_rate"] += 1
-            continue
-        if eu_ref is None and (t.get("sold_per_day") or 0) < min_spd:
-            skipped["filter"] += 1; skipped["low_spd"] += 1
-            continue
         meta = d["items"].get(key) or {}
         dec = d["decor"].get(key) or {}
-        if not meta.get("ok") and not dec:
-            skipped["no_info"] += 1  # noch keine Item-Infos (Name/Ware?) - werden beim nächsten Lauf geholt
-            continue
         stack = meta.get("stackable")
         if stack is None and dec:
             stack = dec.get("stackable")
         if stack:
-            skipped["commodity"] += 1  # Waren (regionsweit) raus
+            skipped["commodity"] += 1
             continue
         name = meta.get("name") or dec.get("name")
         if not name:
-            skipped["no_info"] += 1
+            skipped["no_name"] += 1
             continue
-        cls, sub = meta.get("class_name") or ("Behausung" if dec else None), meta.get("subclass_name") or dec.get("subclass_name")
-        if cat and cat not in (cls or "").lower() and cat not in (sub or "").lower():
-            continue
-        if ql and ql not in name.lower():
-            continue
-        q_ = meta.get("quality") or dec.get("quality")
-        if qual and q_ != qual:
-            continue
-        if eu_ref:
-            maxp = max(1, int(eu_ref[1] * eu_pct / 100 / 10000))
-        else:
-            maxp = int(sale * max_pct / 100 / 10000)  # in Gold, wie Auktionator es erwartet
-        if maxp < 1:
-            continue
+        sale = t.get("sale_avg") or 0
+        e = d["eu"].get(key)
+        ref = None
+        if not sale:
+            ref = max(e[3] if e else 0, t.get("market") or 0, t.get("historical") or 0) or None
         prev = best.get(name)
-        if prev and (prev["usual"] or 0) >= (sale or 0) and not (prev.get("eu") and not eu_ref):
-            continue  # gleicher Name (z. B. mehrere IDs): nur einmal, mit dem höheren Wert
+        if prev and (prev["usual"] or 0) >= sale and not (prev["ref"] is None and prev["usual"] is None):
+            continue  # gleicher Name: ein Eintrag reicht, PBS findet per exakter Suche alle Varianten
         r = item_info(d, key)
-        r.update(name=name, quality=q_, **{"class": cls, "subclass": sub}, usual=sale or None, sale_rate=rate or None,
-                 sold_per_day=t.get("sold_per_day"), max_gold=maxp,
-                 score=int((t.get("sold_per_day") or 0) * sale),  # erwarteter Umsatz pro Tag
-                 eu=bool(eu_ref), eu_median=eu_ref[1] if eu_ref else None, eu_realms=eu_ref[0] if eu_ref else None)
-        if eu_ref:
-            skipped["eu_added"] += 1
+        r.update(name=name, quality=meta.get("quality") or dec.get("quality"),
+                 usual=sale or None, ref=ref, sale_rate=t.get("sale_rate"), sold_per_day=t.get("sold_per_day"),
+                 eu_realms=e[0] if e else 0, score=int((t.get("sold_per_day") or 0) * sale))
         best[name] = r
-    total_found = len(best)
-    rows = sorted(best.values(), key=lambda r: -r["score"])
-    if max_items > 0:
-        rows = rows[:max_items]
-    # Ohne Höchstpreis entscheidet Point Blank Sniper selbst (Preisquelle x Percentage, pro Item-Variante).
-    # Mit Höchstpreis ignoriert PBS sein Percentage für diesen Eintrag.
-    # Mit TSM-Verkaufsdaten: ohne Preis (PBS-Percentage), außer with_prices.
-    # Ohne TSM-Verkaufsdaten: immer mit Höchstpreis aus dem EU-Median, sonst kann PBS sie nicht bewerten.
-    terms = ['"{}";;0;0;0;0;0;0;0;{};;#;;'.format(r["name"].replace('"', ''), r["max_gold"])
-             if (with_prices or r.get("eu")) else '"{}"'.format(r["name"].replace('"', '')) for r in rows]
+    rows = sorted(best.values(), key=lambda r: (-r["score"], r["name"]))
+    terms = []
+    for r in rows:
+        nm = r["name"].replace('"', '')
+        if r["usual"] is None and r["ref"]:
+            terms.append('"{}";;0;0;0;0;0;0;0;{};;#;;'.format(nm, max(1, int(r["ref"] / 10000))))
+        else:
+            terms.append('"{}"'.format(nm))
     res = page(rows, sort, desc, offset, limit)
     res["export"] = (list_name.replace("^", "") or "Enyconomy Sniper") + "^" + "^".join(terms) if terms else ""
     res["count"] = len(terms)
-    # TSM-Gruppenimport: kommagetrennte Item-Strings (i:123, p:Spezies für Haustiere)
+    res["with_ref"] = sum(1 for r in rows if r["usual"] is None and r["ref"])
     res["tsm_export"] = ",".join(r["key"] for r in rows)
-    res["found"] = total_found
     res["skipped"] = skipped
     return res
 
