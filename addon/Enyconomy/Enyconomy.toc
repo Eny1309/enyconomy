@@ -1,9 +1,9 @@
 ## Interface: 120105
 ## Title: Enyconomy
-## Notes: Herstellen über alle Realms mit Zielmengen + Einkaufs- und Sammelliste
+## Notes: Sniper-Liste und Realm-Preise aus dem Enyconomy-Dashboard
 ## Author: Eny
-## Version: 1.2.1
-## OptionalDeps: TradeSkillMaster, Auctionator
+## Version: 2.0
+## OptionalDeps: Auctionator
 ## SavedVariables: EnyconomyDB
 
 SniperList.lua
