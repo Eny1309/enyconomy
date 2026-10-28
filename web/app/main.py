@@ -56,7 +56,8 @@ def load():
         items = {r["item_key"]: dict(r) for r in con.execute("SELECT * FROM item")}
         snaps = {r["cr_id"]: dict(r) for r in con.execute("SELECT * FROM snapshot")}
         decor = {r["item_key"]: dict(r) for r in con.execute("SELECT * FROM decor")}
-        eu = {r["item_key"]: (r["realms"], r["median"], r["low"]) for r in con.execute("SELECT * FROM eu_item")}
+        eu = {r["item_key"]: (r["realms"], r["median"], r["low"], r["high"] or r["median"])
+              for r in con.execute("SELECT * FROM eu_item")}
     _cache.update(eu=eu, stamp=stamp, crs=crs, names=names, locales=locales, rtypes=rtypes, listings=listings, tsm=tsm, items=items, snaps=snaps,
                   decor=decor)
     return _cache
@@ -438,7 +439,7 @@ def top(min_sale: float = 10, min_spd: float = 0.1, category: str = "", q: str =
 def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max_items: int = 0,
            max_pct: float = 70, category: str = "", q: str = "",
            quality: str = "", list_name: str = "Enyconomy Sniper", with_prices: bool = False,
-           include_eu: bool = True, eu_pct: float = 60, eu_min_realms: int = 3,
+           include_eu: bool = True, eu_pct: float = 100, eu_min_realms: int = 1,
            sort: str = "score", desc: bool = True, offset: int = 0, limit: int = Query(100, le=500)):
     """Sniper-Liste für Auktionator/Point Blank Sniper: alle nicht regionsweit gehandelten Items
     mit ausreichender Verkaufsrate. Höchstpreis = max_pct % des Region-Verkaufs-Ø."""
@@ -456,10 +457,13 @@ def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max
         if not t.get("sale_avg"):
             # Keine TSM-Verkäufe: über das EU-weite Angebot aufnehmen (Höchstpreis = eu_pct % des Medians)
             e = d["eu"].get(key)
-            if not include_eu or not e or e[0] < eu_min_realms or e[1] < min_sale * 10000:
+            # Referenz = höchster bekannter Wert, damit ein einzelnes Billig-Angebot (der Snipe selbst)
+            # den Höchstpreis nicht nach unten zieht: teuerstes Realm-Minimum, TSM-Marktwert, TSM-Historisch
+            ref = max(e[3] if e else 0, t.get("market") or 0, t.get("historical") or 0)
+            if not include_eu or not e or e[0] < eu_min_realms or ref < min_sale * 10000:
                 skipped["filter"] += 1; skipped["no_sales"] += 1
                 continue
-            eu_ref = e
+            eu_ref = (e[0], ref)
         elif sale < min_sale * 10000:
             skipped["filter"] += 1; skipped["cheap"] += 1
             continue
@@ -493,7 +497,7 @@ def sniper(min_rate: float = 0.01, min_sale: float = 10, min_spd: float = 0, max
         if qual and q_ != qual:
             continue
         if eu_ref:
-            maxp = int(eu_ref[1] * eu_pct / 100 / 10000)
+            maxp = max(1, int(eu_ref[1] * eu_pct / 100 / 10000))
         else:
             maxp = int(sale * max_pct / 100 / 10000)  # in Gold, wie Auktionator es erwartet
         if maxp < 1:

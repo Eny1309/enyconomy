@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS scout (cr_id INTEGER PRIMARY KEY, ts INTEGER, auction
                                   deals INTEGER, deal_value INTEGER, flips INTEGER, flip_profit INTEGER,
                                   top TEXT);
 CREATE TABLE IF NOT EXISTS eu_item (item_key TEXT PRIMARY KEY, realms INTEGER, median INTEGER, low INTEGER,
-                                    updated INTEGER);
+                                    updated INTEGER, high INTEGER);
 CREATE TABLE IF NOT EXISTS decor (item_key TEXT PRIMARY KEY, name TEXT, quality TEXT, subclass_name TEXT,
                                   stackable INTEGER, updated INTEGER);
 """
@@ -81,6 +81,9 @@ def init_db():
         cols = [r["name"] for r in con.execute("PRAGMA table_info(item)")]
         if "stackable" not in cols:
             con.execute("ALTER TABLE item ADD COLUMN stackable INTEGER")
+        ecols = [r["name"] for r in con.execute("PRAGMA table_info(eu_item)")]
+        if "high" not in ecols:
+            con.execute("ALTER TABLE eu_item ADD COLUMN high INTEGER")
         rcols = [r["name"] for r in con.execute("PRAGMA table_info(realm)")]
         if "locale" not in rcols:
             con.execute("ALTER TABLE realm ADD COLUMN locale TEXT")
@@ -342,10 +345,10 @@ def scout_all(bz):
     rows = []
     for key, arr in eu.items():
         vals = sorted(arr)
-        rows.append((key, len(vals), vals[len(vals) // 2], vals[0], now))
+        rows.append((key, len(vals), vals[len(vals) // 2], vals[0], now, vals[-1]))
     with db() as con:
         con.execute("DELETE FROM eu_item")
-        con.executemany("INSERT INTO eu_item VALUES (?, ?, ?, ?, ?)", rows)
+        con.executemany("INSERT INTO eu_item (item_key, realms, median, low, updated, high) VALUES (?, ?, ?, ?, ?, ?)", rows)
         meta_set(con, "scout_updated", now)
     log.info("Realm-Scout fertig - %d verschiedene Items EU-weit im Angebot", len(rows))
 
