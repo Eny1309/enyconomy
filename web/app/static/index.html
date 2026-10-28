@@ -65,6 +65,32 @@ tr:hover td { background: #161a24; }
 .status-grid { padding: 20px; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
 .card h3 { margin: 0 0 6px; font-size: 15px; }
+#modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: flex-start; justify-content: center; z-index: 10; overflow: auto; padding: 30px 16px; }
+#modal.on { display: flex; }
+.mbox { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; width: min(1200px, 100%); }
+.mhead { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.mhead img { width: 40px; height: 40px; border-radius: 6px; border: 1px solid var(--line); }
+.mhead h2 { margin: 0; font-size: 19px; }
+.mhead .sub { color: var(--muted); font-size: 12px; }
+.mhead select { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+.mhead .avail { text-align: right; } .mhead .avail b { color: var(--accent); font-size: 18px; display: block; }
+.mhead .avail small { color: var(--muted); font-size: 11px; }
+.mbody { display: grid; grid-template-columns: 1fr 260px; }
+.mmain { padding: 14px 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.mside { border-left: 1px solid var(--line); }
+.mcard { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.mcard h4 { margin: 0 0 8px; font-size: 14px; }
+.mcard .hint { margin-bottom: 8px; }
+.mtable { max-height: 360px; overflow: auto; }
+.mtable td, .mtable th { padding: 6px 10px; font-size: 13px; }
+.mtable tr.own td { background: rgba(245,197,66,.12); }
+.mside th, .mside td { padding: 7px 12px; font-size: 13px; }
+.mside tr.best td { background: rgba(245,197,66,.12); }
+.pop { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; color: #111; }
+.pop-FULL { background: var(--red); } .pop-HIGH { background: var(--orange); } .pop-MEDIUM { background: var(--accent); } .pop-LOW { background: var(--green); }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); justify-content: center; margin-top: 4px; }
+.legend i { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 5px; }
+@media (max-width: 900px) { .mbody { grid-template-columns: 1fr; } .mside { border-left: 0; border-top: 1px solid var(--line); } }
 @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); } }
 </style>
 </head>
@@ -95,6 +121,7 @@ tr:hover td { background: #161a24; }
   </section>
 </main>
 <div id="toast"></div>
+<div id="modal"></div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -436,19 +463,96 @@ async function toggleDetail(tr, r) {
     tr.after(row);
     return;
   }
-  const d = await (await fetch(`/api/item/${r.key}`)).json();
-  const t = d.tsm || {};
-  const row = document.createElement("tr");
-  row.className = "detail";
-  row.innerHTML = `<td colspan="${COLS[tab].length}"><div class="chips">
-    ${d.realms.map(x => `<div class="chip"><b>${esc(x.name)}</b>: ${x.min ? gold(x.min) + " (" + x.qty + ")" : '<span class="o">nicht da</span>'}</div>`).join("")}
-    <div class="chip">TSM Verkaufs-Ø: <b>${gold(t.sale_avg)}</b></div>
-    <div class="chip">Marktwert: <b>${gold(t.market)}</b></div>
-    <div class="chip">Historisch: <b>${gold(t.historical)}</b></div>
-    <div class="chip">Rate: <b>${fix(t.sale_rate, 3)}</b> · /Tag: <b>${fix(t.sold_per_day, 2)}</b></div>
-  </div></td>`;
-  tr.after(row);
+  openItem(r.key);
 }
+
+// ---------- Item-Detail ----------
+const POP = { FULL: "VOLL", HIGH: "HOCH", MEDIUM: "MITTEL", LOW: "NIEDRIG", NEW: "NEU", RECOMMENDED: "EMPF." };
+function axisGold(v) { const g = v / 10000; return g >= 1000 ? Math.round(g / 1000).toLocaleString("de-DE") + "k" : Math.round(g).toLocaleString("de-DE"); }
+
+function historySvg(h) {
+  if (h.length < 2) return `<div class="hint">Noch zu wenig Verlauf (${h.length} Tag${h.length === 1 ? "" : "e"}). Ein Punkt pro Realm-Scout-Lauf, also einmal am Tag.</div>`;
+  const W = 760, H = 220, L = 56, R = 46, T = 10, B = 28, w = W - L - R, hh = H - T - B;
+  const pv = h.flatMap(p => [p.low, p.median, p.sale_avg]).filter(v => v != null);
+  const pmax = Math.max(...pv) * 1.1 || 1, qmax = Math.max(...h.map(p => p.qty || 0)) * 1.1 || 1;
+  const x = i => L + i * w / (h.length - 1), yp = v => T + hh - v / pmax * hh, yq = v => T + hh - v / qmax * hh;
+  const line = (k, col) => { const pts = h.map((p, i) => p[k] == null ? null : `${x(i)},${yp(p[k])}`).filter(Boolean);
+    return pts.length > 1 ? `<polyline fill="none" stroke="${col}" stroke-width="2" points="${pts.join(" ")}"/>` : ""; };
+  const area = `<polygon fill="rgba(139,124,246,.18)" stroke="var(--accent2)" stroke-width="1.5" points="${L},${T + hh} ${h.map((p, i) => `${x(i)},${yq(p.qty || 0)}`).join(" ")} ${L + w},${T + hh}"/>`;
+  let grid = "";
+  for (let k = 0; k <= 4; k++) {
+    const y = T + hh * k / 4;
+    grid += `<line x1="${L}" x2="${L + w}" y1="${y}" y2="${y}" stroke="var(--line)"/>
+      <text x="${L - 6}" y="${y + 4}" text-anchor="end" fill="var(--accent)" font-size="11">${axisGold(pmax * (4 - k) / 4)}g</text>
+      <text x="${L + w + 6}" y="${y + 4}" fill="var(--accent2)" font-size="11">${Math.round(qmax * (4 - k) / 4)}</text>`;
+  }
+  const step = Math.max(1, Math.ceil(h.length / 10));
+  const labels = h.map((p, i) => i % step ? "" : `<text x="${x(i)}" y="${H - 8}" text-anchor="middle" fill="var(--muted)" font-size="11">${p.day.slice(8, 10)}.${p.day.slice(5, 7)}.</text>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%">${grid}${area}${line("sale_avg", "var(--green)")}${line("median", "var(--orange)")}${line("low", "var(--red)")}${labels}</svg>
+    <div class="legend"><span><i style="background:var(--red)"></i>Günstigster EU</span><span><i style="background:var(--orange)"></i>Median der Realms</span>
+    <span><i style="background:var(--green)"></i>TSM Verkaufs-Ø</span><span><i style="background:var(--accent2)"></i>Menge EU</span></div>`;
+}
+
+function barsSvg(realms) {
+  if (!realms.length) return "";
+  const W = 760, H = 150, L = 56, T = 8, B = 8, w = W - L - 8, hh = H - T - B, max = realms[realms.length - 1].min * 1.05 || 1;
+  const bw = w / realms.length;
+  let g = "";
+  for (let k = 0; k <= 3; k++) { const y = T + hh * k / 3;
+    g += `<line x1="${L}" x2="${W - 8}" y1="${y}" y2="${y}" stroke="var(--line)"/><text x="${L - 6}" y="${y + 4}" text-anchor="end" fill="var(--accent)" font-size="11">${axisGold(max * (3 - k) / 3)}g</text>`; }
+  const bars = realms.map((r, i) => { const bh = r.min / max * hh;
+    return `<rect x="${L + i * bw + bw * .1}" y="${T + hh - bh}" width="${Math.max(1, bw * .8)}" height="${bh}" fill="${r.own ? "var(--accent)" : "#a07d2c"}"><title>${esc(r.name)}: ${gold(r.min)}</title></rect>`; }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%">${g}${bars}</svg>`;
+}
+
+async function openItem(key, cr) {
+  const m = $("#modal");
+  if (!cr) { m.innerHTML = `<div class="mbox"><div class="empty">Lade ...</div></div>`; m.classList.add("on"); }
+  const d = await (await fetch(`/api/item/${key}${cr ? "?cr=" + cr : ""}`)).json();
+  const t = d.tsm || {};
+  const link = d.pet ? `https://www.wowhead.com/de/battle-pet/${d.id}` : `https://www.wowhead.com/de/item=${d.id}`;
+  const sel = d.realms.find(x => x.cr_id === d.cr);
+  m.innerHTML = `<div class="mbox">
+    <div class="mhead">
+      ${d.icon ? `<img src="${d.icon}">` : ""}
+      <div style="flex:1"><h2 class="q-${d.quality}">${esc(d.name)}</h2>
+        <div class="sub">#${d.id}${d.level ? " · iLvl " + d.level : ""}${d.class ? " · " + esc(d.class) : ""}${d.subclass ? " / " + esc(d.subclass) : ""} · <a href="${link}" target="_blank" rel="noopener" style="color:var(--muted)">wowhead ↗</a></div></div>
+      <select id="mRealm">${d.own_realms.map(o => `<option value="${o.cr_id}" ${o.cr_id === d.cr ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</select>
+      <div class="avail"><b>${d.eu_qty.toLocaleString("de-DE")}</b><small>verfügbar EU · ${d.eu_realms} Realm-Gruppen</small></div>
+      <button class="btn" id="mClose">Schließen</button>
+    </div>
+    <div class="mbody">
+      <div class="mmain">
+        <div class="chips">
+          <div class="chip">TSM Verkaufs-Ø: <b>${gold(t.sale_avg)}</b></div>
+          <div class="chip">Marktwert: <b>${gold(t.market)}</b></div>
+          <div class="chip">Historisch: <b>${gold(t.historical)}</b></div>
+          <div class="chip">Verkaufsrate: <b>${fix(t.sale_rate, 3)}</b></div>
+          <div class="chip">Verkäufe/Tag: <b>${fix(t.sold_per_day, 2)}</b></div>
+          ${d.realms.length ? `<div class="chip">Günstigster EU: <b>${gold(d.realms[0].min)}</b> (${esc(d.realms[0].name)})</div>` : ""}
+        </div>
+        <div class="mcard"><h4>Preisverlauf EU</h4>${historySvg(d.history)}</div>
+        <div class="mcard"><h4>Aktuelle Preise · EU-Realms</h4>
+          <div class="hint">Günstigster Preis je Realm-Gruppe, sortiert. Deine Realms gelb. Fremde Realms vom letzten Realm-Scout${d.scout_updated ? " (" + new Date(d.scout_updated * 1000).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) + ")" : " - noch nicht gelaufen"}, deine stündlich.</div>
+          ${d.realms.length ? barsSvg(d.realms) + `<div class="mtable"><table><thead><tr><th>Realm</th><th>Sprache</th><th>Bevölkerung</th><th class="num">Preis</th><th class="num">Menge</th><th class="num">Angebote</th></tr></thead><tbody>
+          ${d.realms.map(x => `<tr class="${x.own ? "own" : ""}"><td style="white-space:normal">${x.own && x.short !== x.name ? "<b>" + esc(x.short) + "</b> · " + esc(x.name) : x.own ? "<b>" + esc(x.name) + "</b>" : esc(x.name)}</td><td>${esc(x.lang)}</td>
+            <td>${x.pop ? `<span class="pop pop-${x.pop}">${POP[x.pop] || x.pop}</span>` : "-"}</td><td class="num">${gold(x.min)}</td><td class="num">${x.qty}</td><td class="num">${x.n}</td></tr>`).join("")}
+          </tbody></table></div>` : `<div class="empty">Gerade nirgends in der EU angeboten${t.sale_avg ? "" : " (oder eine Ware - die laufen über das regionsweite AH und sind hier nicht drin)"}.</div>`}
+        </div>
+      </div>
+      <div class="mside">
+        <table><thead><tr><th>Angebote · ${esc((d.own_realms.find(o => o.cr_id === d.cr) || {}).name || "")}</th><th class="num">Menge</th></tr></thead><tbody>
+        ${d.listings.length ? d.listings.map(p => `<tr class="${p === d.listings[0] ? "best" : ""}"><td>${gold(p.unit)}</td><td class="num">${p.qty}${p.n > 1 ? ` <span class="hint">(${p.n})</span>` : ""}</td></tr>`).join("")
+          : `<tr><td colspan="2" class="hint">${sel ? "Einzelangebote kommen mit dem nächsten stündlichen Scan." : "Keine Angebote."}</td></tr>`}
+        </tbody></table>
+      </div>
+    </div></div>`;
+  $("#mClose").onclick = closeItem;
+  $("#mRealm").onchange = e => openItem(key, +e.target.value);
+}
+function closeItem() { $("#modal").classList.remove("on"); $("#modal").innerHTML = ""; }
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeItem(); });
+document.addEventListener("click", e => { if (e.target.id === "modal") closeItem(); });
 
 const WD = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"];
 async function loadTiming() {

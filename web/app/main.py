@@ -42,12 +42,14 @@ def load():
         if _cache["stamp"] == stamp:
             return _cache
         crs = C.tracked_cr_ids()
-        names, locales, rtypes = {}, {}, {}
+        names, locales, rtypes, pops = {}, {}, {}, {}
         for r in con.execute("SELECT * FROM realm"):
             names.setdefault(r["cr_id"], []).append(r["name"])
             if "locale" in r.keys():
                 locales.setdefault(r["cr_id"], []).append(r["locale"])
                 rtypes.setdefault(r["cr_id"], []).append(r["rtype"])
+            if "pop" in r.keys() and r["pop"]:
+                pops[r["cr_id"]] = r["pop"]
         listings = {}
         q = "SELECT cr_id, item_key, min_buyout, qty, n FROM listing WHERE cr_id IN (%s)" % ",".join("?" * len(crs))
         for r in con.execute(q, crs) if crs else []:
@@ -58,7 +60,7 @@ def load():
         decor = {r["item_key"]: dict(r) for r in con.execute("SELECT * FROM decor")}
         eu = {r["item_key"]: (r["realms"], r["median"], r["low"], r["high"] or r["median"])
               for r in con.execute("SELECT * FROM eu_item")}
-    _cache.update(eu=eu, stamp=stamp, crs=crs, names=names, locales=locales, rtypes=rtypes, listings=listings, tsm=tsm, items=items, snaps=snaps,
+    _cache.update(eu=eu, stamp=stamp, crs=crs, names=names, locales=locales, rtypes=rtypes, pops=pops, listings=listings, tsm=tsm, items=items, snaps=snaps,
                   decor=decor)
     return _cache
 
@@ -601,15 +603,39 @@ def scout(hide_ru: bool = True, lang: str = "", sort: str = "flip_profit", desc:
 
 
 @app.get("/api/item/{key}")
-def item(key: str):
-    """Ein Item auf allen eigenen Realms."""
+def item(key: str, cr: int = 0):
+    """Item-Detail: Preise auf allen EU-Realm-Gruppen, Angebote auf einem eigenen Realm, Preisverlauf."""
     d = load()
-    per = d["listings"].get(key, {})
     r = item_info(d, key)
+    dec = d["decor"].get(key) or {}
+    if r["name"] == key and dec.get("name"):
+        r.update(name=dec["name"], quality=dec.get("quality"), **{"class": "Behausung", "subclass": dec.get("subclass_name")})
     r["tsm"] = d["tsm"].get(key)
-    r["realms"] = [{"name": realm_label(d, cr), "cr_id": cr,
-                    "min": per[cr][0] if cr in per else None,
-                    "qty": per[cr][1] if cr in per else 0} for cr in d["crs"]]
+    own = set(d["crs"])
+    with C.db() as con:
+        per = {row["cr_id"]: (row["min_buyout"], row["qty"], row["n"]) for row in
+               con.execute("SELECT cr_id, min_buyout, qty, n FROM eu_listing WHERE item_key=?", (key,))}
+        for row in con.execute("SELECT cr_id, min_buyout, qty, n FROM listing WHERE item_key=?", (key,)):
+            per[row["cr_id"]] = (row["min_buyout"], row["qty"], row["n"])  # eigene Realms: stündlich, also aktueller
+        if not cr:
+            have = [c for c in d["crs"] if c in per]
+            cr = (min(have, key=lambda c: per[c][0]) if have else (d["crs"][0] if d["crs"] else 0))
+        points = [{"unit": row["unit"], "qty": row["qty"], "n": row["n"]} for row in con.execute(
+            "SELECT unit, qty, n FROM price_point WHERE item_key=? AND cr_id=? ORDER BY unit", (key, cr))]
+        hist = [dict(row) for row in con.execute(
+            "SELECT day, low, median, qty, realms, sale_avg FROM eu_history WHERE item_key=? ORDER BY day", (key,))]
+        scout_updated = C.meta_get(con, "scout_updated")
+    realms = []
+    for c, (price, qty, n) in per.items():
+        langs = sorted({LANG.get(l, l or "?") for l in d["locales"].get(c, [])})
+        realms.append({"cr_id": c, "name": realm_full(d, c), "short": realm_short(d, c) if c in own else None,
+                       "own": c in own, "lang": "/".join(langs), "pop": d["pops"].get(c),
+                       "rtype": ", ".join(sorted({t for t in d["rtypes"].get(c, []) if t})),
+                       "min": price, "qty": qty, "n": n})
+    realms.sort(key=lambda x: x["min"])
+    r.update(realms=realms, cr=cr, listings=points, history=hist, scout_updated=scout_updated,
+             eu_qty=sum(x["qty"] for x in realms), eu_realms=len(realms),
+             own_realms=[{"cr_id": c, "name": realm_short(d, c)} for c in d["crs"]])
     return r
 
 

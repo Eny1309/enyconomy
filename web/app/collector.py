@@ -28,6 +28,7 @@ TSM_HOURS = float(os.environ.get("TSM_HOURS", "6"))
 PET_CAGE = 82800
 TIMEZONE = os.environ.get("TIMEZONE", "Europe/Berlin")
 SCOUT_HOURS = float(os.environ.get("SCOUT_HOURS", "24"))   # 0 = nur per Knopf
+HISTORY_DAYS = int(os.environ.get("HISTORY_DAYS", "180"))  # Preisverlauf aufbewahren
 SCOUT_MIN_PROFIT = int(float(os.environ.get("SCOUT_MIN_PROFIT", "100")) * 10000)
 SCOUT_MIN_RETURN = float(os.environ.get("SCOUT_MIN_RETURN", "30"))
 DEAL_PCT = float(os.environ.get("DEAL_PCT", "65"))         # Schnäppchen = Preis <= x % des Region-Verkaufs-Ø
@@ -62,6 +63,12 @@ CREATE TABLE IF NOT EXISTS scout (cr_id INTEGER PRIMARY KEY, ts INTEGER, auction
                                   top TEXT);
 CREATE TABLE IF NOT EXISTS eu_item (item_key TEXT PRIMARY KEY, realms INTEGER, median INTEGER, low INTEGER,
                                     updated INTEGER, high INTEGER);
+CREATE TABLE IF NOT EXISTS eu_listing (item_key TEXT, cr_id INTEGER, min_buyout INTEGER, qty INTEGER, n INTEGER,
+                                       PRIMARY KEY (item_key, cr_id)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS price_point (cr_id INTEGER, item_key TEXT, unit INTEGER, qty INTEGER, n INTEGER,
+                                        PRIMARY KEY (item_key, cr_id, unit)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS eu_history (item_key TEXT, day TEXT, low INTEGER, median INTEGER, qty INTEGER,
+                                       realms INTEGER, sale_avg INTEGER, PRIMARY KEY (item_key, day)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS decor (item_key TEXT PRIMARY KEY, name TEXT, quality TEXT, subclass_name TEXT,
                                   stackable INTEGER, updated INTEGER);
 """
@@ -89,6 +96,9 @@ def init_db():
             con.execute("ALTER TABLE realm ADD COLUMN locale TEXT")
             con.execute("ALTER TABLE realm ADD COLUMN rtype TEXT")
             meta_set(con, "realms_updated", 0)  # Realm-Liste mit Sprache neu holen
+        if "pop" not in [r["name"] for r in con.execute("PRAGMA table_info(realm)")]:
+            con.execute("ALTER TABLE realm ADD COLUMN pop TEXT")
+            meta_set(con, "realms_updated", 0)  # Bevölkerung nachholen
 
 
 def meta_get(con, k, default=None):
@@ -166,7 +176,8 @@ def refresh_realms(bz):
             if isinstance(name, dict):
                 name = name.get(LOCALE) or next(iter(name.values()), "")
             rtype = _loc((realm.get("type") or {}).get("name"))
-            out.append((data["id"], name, realm.get("slug"), realm.get("locale"), rtype))
+            pop = (data.get("population") or {}).get("type")
+            out.append((data["id"], name, realm.get("slug"), realm.get("locale"), rtype, pop))
         return out
 
     with ThreadPoolExecutor(8) as ex:
@@ -174,7 +185,7 @@ def refresh_realms(bz):
             rows.extend(part)
     with db() as con:
         con.execute("DELETE FROM realm")
-        con.executemany("INSERT OR REPLACE INTO realm (cr_id, name, slug, locale, rtype) VALUES (?, ?, ?, ?, ?)", rows)
+        con.executemany("INSERT OR REPLACE INTO realm (cr_id, name, slug, locale, rtype, pop) VALUES (?, ?, ?, ?, ?, ?)", rows)
         meta_set(con, "realms_updated", int(time.time()))
     log.info("Realm-Gruppen: %d Realms in %d Gruppen", len(rows), len(links))
 
@@ -220,6 +231,7 @@ def fetch_auctions(bz, cr_id):
     agg = {}
     n = 0
     ids, units = [], {}
+    points = {}
     for a in data.get("auctions", []):
         buyout = a.get("buyout")
         qty = a.get("quantity") or 1
@@ -231,6 +243,12 @@ def fetch_auctions(bz, cr_id):
         if a.get("id"):
             ids.append(a["id"])
             units[a["id"]] = (key, unit)
+        pp = points.get((key, unit))
+        if pp is None:
+            points[(key, unit)] = [qty, 1]
+        else:
+            pp[0] += qty
+            pp[1] += 1
         e = agg.get(key)
         if e is None:
             agg[key] = [unit, qty, 1]
@@ -244,6 +262,9 @@ def fetch_auctions(bz, cr_id):
         con.execute("DELETE FROM listing WHERE cr_id=?", (cr_id,))
         con.executemany("INSERT INTO listing (cr_id, item_key, min_buyout, qty, n) VALUES (?, ?, ?, ?, ?)",
                         [(cr_id, k, v[0], v[1], v[2]) for k, v in agg.items()])
+        con.execute("DELETE FROM price_point WHERE cr_id=?", (cr_id,))
+        con.executemany("INSERT INTO price_point (cr_id, item_key, unit, qty, n) VALUES (?, ?, ?, ?, ?)",
+                        [(cr_id, k, u, v[0], v[1]) for (k, u), v in points.items()])
         con.execute("INSERT OR REPLACE INTO snapshot (cr_id, last_modified, fetched_at, n_auctions) VALUES (?, ?, ?, ?)",
                     (cr_id, resp.headers.get("Last-Modified"), int(time.time()), n))
     log.info("Realm-Gruppe %d: %d Auktionen, %d Items", cr_id, n, len(agg))
@@ -273,10 +294,11 @@ def record_deal_stats(cr_id, ids, units):
         con.executemany("INSERT OR IGNORE INTO auction_id (cr_id, id) VALUES (?, ?)", [(cr_id, i) for i in ids])
 
 
-def scout_realm(bz, cr_id, tsm, home, eu=None):
-    """Eine fremde Realm-Gruppe bewerten: Schnäppchen und Flips zu deinen Realms."""
+def scout_realm(bz, cr_id, tsm, home, eu=None, euq=None):
+    """Eine fremde Realm-Gruppe bewerten: Schnäppchen und Flips zu deinen Realms.
+    Dazu Mindestpreis, Menge und Angebote je Item für die Item-Detailansicht speichern."""
     data, _ = bz.get(f"/data/wow/connected-realm/{cr_id}/auctions", "dynamic")
-    mins, n = {}, 0
+    mins, agg, n = {}, {}, 0
     for a in (data or {}).get("auctions", []):
         buyout, qty = a.get("buyout"), a.get("quantity") or 1
         if not buyout or "item" not in a:
@@ -285,12 +307,25 @@ def scout_realm(bz, cr_id, tsm, home, eu=None):
         key, unit = item_key(a["item"]), buyout // qty
         if key not in mins or unit < mins[key]:
             mins[key] = unit
+        e = agg.get(key)
+        if e is None:
+            agg[key] = [qty, 1]
+        else:
+            e[0] += qty
+            e[1] += 1
+    if data is not None:
+        with db() as con:
+            con.execute("DELETE FROM eu_listing WHERE cr_id=?", (cr_id,))
+            con.executemany("INSERT INTO eu_listing (item_key, cr_id, min_buyout, qty, n) VALUES (?, ?, ?, ?, ?)",
+                            [(k, cr_id, mins[k], v[0], v[1]) for k, v in agg.items()])
     if eu is not None:
         for key, unit in mins.items():
             arr = eu.get(key)
             if arr is None:
                 arr = eu[key] = array("Q")
             arr.append(unit)
+            if euq is not None:
+                euq[key] = euq.get(key, 0) + agg[key][0]
     deals = deal_value = flips = flip_profit = 0
     top = []
     for key, unit in mins.items():
@@ -331,22 +366,30 @@ def scout_all(bz):
     todo = [cr for cr in all_crs if cr not in own]
     log.info("Realm-Scout: %d Realm-Gruppen ...", len(todo))
     # EU-weites Angebot: pro Item der Mindestpreis je Realm-Gruppe (inkl. der eigenen)
-    eu = {}
+    eu, euq = {}, {}
     with db() as con:
-        for r in con.execute("SELECT item_key, min_buyout FROM listing"):
+        for r in con.execute("SELECT item_key, min_buyout, qty FROM listing"):
             eu.setdefault(r["item_key"], array("Q")).append(r["min_buyout"])
+            euq[r["item_key"]] = euq.get(r["item_key"], 0) + (r["qty"] or 0)
     for i, cr in enumerate(todo, 1):
         try:
-            f = scout_realm(bz, cr, tsm, home, eu)
+            f = scout_realm(bz, cr, tsm, home, eu, euq)
             log.info("Scout %d/%d: Realm-Gruppe %d - %d Flips", i, len(todo), cr, f)
         except Exception as e:
             log.warning("Scout Realm-Gruppe %d: %s", cr, e)
     now = int(time.time())
-    rows = []
+    day = datetime.now(ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
+    rows, hist = [], []
     for key, arr in eu.items():
         vals = sorted(arr)
         rows.append((key, len(vals), vals[len(vals) // 2], vals[0], now, vals[-1]))
+        hist.append((key, day, vals[0], vals[len(vals) // 2], euq.get(key, 0), len(vals), (tsm.get(key) or (None,))[0]))
     with db() as con:
+        con.executemany("INSERT OR REPLACE INTO eu_history (item_key, day, low, median, qty, realms, sale_avg) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)", hist)
+        if HISTORY_DAYS > 0:
+            cut = datetime.fromtimestamp(now - HISTORY_DAYS * 86400, ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
+            con.execute("DELETE FROM eu_history WHERE day < ?", (cut,))
         con.execute("DELETE FROM eu_item")
         con.executemany("INSERT INTO eu_item (item_key, realms, median, low, updated, high) VALUES (?, ?, ?, ?, ?, ?)", rows)
         meta_set(con, "scout_updated", now)
