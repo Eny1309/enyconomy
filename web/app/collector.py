@@ -747,7 +747,8 @@ class Collector:
         while True:
             with db() as con:
                 last = int(meta_get(con, "scout_updated", 0))
-            due = SCOUT_HOURS > 0 and time.time() - last > SCOUT_HOURS * 3600
+                empty = con.execute("SELECT 1 FROM eu_listing WHERE cr_id NOT IN (SELECT CAST(substr(k, 6) AS INTEGER) FROM meta WHERE k LIKE 'live:%') LIMIT 1").fetchone() is None
+            due = (SCOUT_HOURS > 0 and time.time() - last > SCOUT_HOURS * 3600) or empty  # Preise aller Realms fehlen noch
             if due or self.scout_wake.is_set():
                 self.scout_wake.clear()
                 self.scouting = True
