@@ -163,7 +163,7 @@ def realms():
 @app.get("/api/flips")
 def flips(min_profit: float = 100, min_return: float = 30, min_rate: float = 0.02, min_spd: float = 0,
           max_buy: float = 0, buy: int = 0, sell: int = 0, q: str = "", category: str = "",
-          estimated: bool = True, all_sells: bool = False,
+          estimated: bool = True, all_sells: bool = False, only_cheapest: bool = False,
           sort: str = "profit", desc: bool = True, offset: int = 0, limit: int = Query(50, le=500)):
     """Auf Realm A kaufen, über die Kriegsmeuten-Bank auf Realm B verkaufen.
     Verkaufspreis = niedrigerer Wert aus Region-Verkaufs-Ø und aktuellem Mindestpreis dort.
@@ -218,8 +218,12 @@ def flips(min_profit: float = 100, min_return: float = 30, min_rate: float = 0.0
                          lowest_there=lowest, estimated=est, profit=int(profit), ret=round(ret, 1),
                          sale_rate=t.get("sale_rate"), sold_per_day=t.get("sold_per_day"))
                 rows.append(r)
+    if only_cheapest:  # nur wo der Kaufrealm gerade EU-weit am günstigsten ist
+        add_eu_cheapest(d, rows, "buy")
+        rows = [r for r in rows if r.get("eu_cheapest")]
     res = page(rows, sort, desc, offset, limit)
-    add_eu_cheapest(d, res["rows"], "buy")
+    if not only_cheapest:
+        add_eu_cheapest(d, res["rows"], "buy")
     return res
 
 
@@ -230,11 +234,13 @@ def add_eu_cheapest(d, rows, price_field):
         return
     per = {}
     with C.db() as con:
-        q = ",".join("?" * len(keys))
-        for x in con.execute(f"SELECT item_key, cr_id, min_buyout FROM eu_listing WHERE item_key IN ({q})", keys):
-            per.setdefault(x["item_key"], {})[x["cr_id"]] = x["min_buyout"]
-        for x in con.execute(f"SELECT item_key, cr_id, min_buyout FROM listing WHERE item_key IN ({q})", keys):
-            per.setdefault(x["item_key"], {})[x["cr_id"]] = x["min_buyout"]  # eigene Realms: stündlich
+        for i in range(0, len(keys), 900):
+            part = keys[i:i + 900]
+            q = ",".join("?" * len(part))
+            for x in con.execute(f"SELECT item_key, cr_id, min_buyout FROM eu_listing WHERE item_key IN ({q})", part):
+                per.setdefault(x["item_key"], {})[x["cr_id"]] = x["min_buyout"]
+            for x in con.execute(f"SELECT item_key, cr_id, min_buyout FROM listing WHERE item_key IN ({q})", part):
+                per.setdefault(x["item_key"], {})[x["cr_id"]] = x["min_buyout"]  # eigene Realms: stündlich
     own = set(d["crs"])
     for r in rows:
         offers = per.get(r["key"], {})
