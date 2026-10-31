@@ -209,7 +209,7 @@ const FILTERS = {
     { k: "lang", label: "Sprache", type: "select", options: [["", "Alle"], ["DE", "Deutsch"], ["EN", "Englisch"], ["FR", "Französisch"], ["ES", "Spanisch"], ["IT", "Italienisch"], ["PT", "Portugiesisch"]] },
     { k: "hide_ru", label: "Russische Realms ausblenden", type: "check", v: true },
     { k: "_scout", label: "Jetzt alle Realms scouten", type: "button", action: async () => { await fetch("/api/scout", { method: "POST" }); toast("Scout gestartet - dauert einige Minuten"); } },
-    { hint: "Lädt die Auktionen aller fremden EU-Realm-Verbünde (automatisch alle 24 h). Flips = dort kaufen, auf deinen Realms verkaufen (≥100g und ≥30 % nach Gebühr, Verkaufspreis = niedrigerer Wert aus Region-Verkaufs-Ø und deinem besten Angebot). Schnäppchen = Angebote ≤ 65 % des Verkaufs-Ø. Klick auf eine Zeile zeigt die Top-Flips. Nebenbei merkt sich der Scout jedes Item, das EU-weit angeboten wird - daraus kommen in der Sniper-Liste die Items ohne TSM-Verkäufe." },
+    { hint: "Lädt die Auktionen aller fremden EU-Realm-Verbünde (automatisch alle 24 h). Deine Realms (DEINER) werden stündlich mitbewertet, ihre Flips gehen zu deinen anderen Realms. Flips = dort kaufen, auf deinen Realms verkaufen (≥100g und ≥30 % nach Gebühr, Verkaufspreis = niedrigerer Wert aus Region-Verkaufs-Ø und deinem besten Angebot). Schnäppchen = Angebote ≤ 65 % des Verkaufs-Ø. Klick auf eine Zeile zeigt die Top-Flips. Nebenbei merkt sich der Scout jedes Item, das EU-weit angeboten wird - daraus kommen in der Sniper-Liste die Items ohne TSM-Verkäufe." },
   ],
   timing: [
     { k: "realm", label: "Realm", type: "realm" },
@@ -230,7 +230,7 @@ const COLS = {
     { k: "sold_per_day", t: "/Tag", num: 1, f: r => fix(r.sold_per_day, 2) },
   ],
   scout: [
-    { k: "realm", t: "Realm-Verbund", f: r => `<b>${esc(r.realm.split(", ")[0])}</b>${r.realms_n > 1 ? ` <span class="sub">+${r.realms_n - 1}</span>` : ""}<div class="sub" title="${esc(r.realm)}">${esc(r.realm.length > 60 ? r.realm.slice(0, 60) + "…" : r.realm)}</div>` },
+    { k: "realm", t: "Realm-Verbund", f: r => `${r.mine ? '<span class="pop pop-MEDIUM" style="margin-right:6px">DEINER</span>' : ""}<b>${esc(r.mine ? r.short : r.realm.split(", ")[0])}</b>${r.realms_n > 1 ? ` <span class="sub">+${r.realms_n - 1}</span>` : ""}<div class="sub" title="${esc(r.realm)}">${esc(r.realm.length > 60 ? r.realm.slice(0, 60) + "…" : r.realm)}</div>` },
     { k: "lang", t: "Sprache", f: r => `<b>${esc(r.lang)}</b>${r.rtype ? `<div class="sub">${esc(r.rtype)}</div>` : ""}` },
     { k: "auctions", t: "Auktionen", num: 1, f: r => (r.auctions || 0).toLocaleString("de-DE") },
     { k: "flips", t: "Flips", num: 1 },

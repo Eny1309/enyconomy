@@ -327,6 +327,11 @@ def scout_realm(bz, cr_id, tsm, home, eu=None, euq=None):
             arr.append(unit)
             if euq is not None:
                 euq[key] = euq.get(key, 0) + agg[key][0]
+    return scout_eval(cr_id, mins, n, tsm, home)
+
+
+def scout_eval(cr_id, mins, n, tsm, home):
+    """Schnäppchen und Flips einer Realm-Gruppe bewerten und in 'scout' speichern."""
     deals = deal_value = flips = flip_profit = 0
     top = []
     for key, unit in mins.items():
@@ -404,6 +409,28 @@ def live_realm(bz, cr_id, max_age=3600):
         return now
 
 
+def scout_own(tsm=None):
+    """Eigene Realms aus den stündlichen Daten bewerten (Flips zu deinen anderen Realms)."""
+    own = set(tracked_cr_ids())
+    if tsm is None:
+        with db() as con:
+            tsm = {r["item_key"]: (r["sale_avg"], r["sale_rate"]) for r in
+                   con.execute("SELECT item_key, sale_avg, sale_rate FROM tsm WHERE sale_avg IS NOT NULL")}
+    with db() as con:
+        snaps = {r["cr_id"]: r["n_auctions"] for r in con.execute("SELECT cr_id, n_auctions FROM snapshot")}
+        own_mins = {}
+        for r in con.execute("SELECT cr_id, item_key, min_buyout FROM listing WHERE cr_id IN (%s)" % ",".join("?" * len(own)),
+                             list(own)) if own else []:
+            own_mins.setdefault(r["cr_id"], {})[r["item_key"]] = r["min_buyout"]
+        own_home = {}
+        for r in con.execute("SELECT cr_id, item_key, min_buyout FROM listing WHERE cr_id IN (%s)" % ",".join("?" * len(own)),
+                             list(own)) if own else []:
+            own_home.setdefault(r["item_key"], []).append((r["cr_id"], r["min_buyout"]))
+    for cr, mins in own_mins.items():
+        others = {k: [p for c, p in v if c != cr] for k, v in own_home.items()}
+        scout_eval(cr, mins, snaps.get(cr) or 0, tsm, {k: v for k, v in others.items() if v})
+
+
 def scout_all(bz):
     """Alle Realm-Gruppen der Region einmal durchgehen (die eigenen ausgenommen)."""
     own = set(tracked_cr_ids())
@@ -416,6 +443,7 @@ def scout_all(bz):
                              list(own)) if own else []:
             home.setdefault(r["item_key"], []).append(r["min_buyout"])
     todo = [cr for cr in all_crs if cr not in own]
+    scout_own(tsm)
     log.info("Realm-Scout: %d Realm-Gruppen ...", len(todo))
     # EU-weites Angebot: pro Item der Mindestpreis je Realm-Gruppe (inkl. der eigenen)
     eu, euq = {}, {}
@@ -728,6 +756,10 @@ class Collector:
             except Exception as e:
                 log.exception("Item-Infos (Pakete): %s", e)
             fill_item_meta(self.bz)
+            try:
+                scout_own()  # eigene Realms im Realm-Scout stündlich aktuell
+            except Exception as e:
+                log.exception("Scout eigene Realms: %s", e)
             with db() as con:
                 meta_set(con, "last_run", int(time.time()))
         finally:

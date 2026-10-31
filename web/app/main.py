@@ -609,16 +609,18 @@ def scout(hide_ru: bool = True, lang: str = "", sort: str = "flip_profit", desc:
         names = sorted(d["names"].get(r["cr_id"], [str(r["cr_id"])]))
         langs = sorted({LANG.get(l, l or "?") for l in d["locales"].get(r["cr_id"], [])})
         types = sorted({t for t in d["rtypes"].get(r["cr_id"], []) if t})
+        mine = r["cr_id"] in set(d["crs"])
         ru = "RU" in langs or any(_re.search("[а-яА-Я]", n) for n in names)
-        if hide_ru and ru:
+        if hide_ru and ru and not mine:
             continue
-        if lang and lang not in langs:
+        if lang and lang not in langs and not mine:
             continue
         top = []
         for profit, key, unit in json.loads(r["top"] or "[]")[:5]:
             meta = d["items"].get(key) or d["decor"].get(key) or {}
             top.append(f'{meta.get("name") or key} (+{profit // 10000:,}g)'.replace(",", "."))
         rows.append({"key": str(r["cr_id"]), "realm": ", ".join(names), "realms_n": len(names), "ts": r["ts"],
+                     "mine": mine, "short": realm_short(d, r["cr_id"]) if mine else None,
                      "lang": "/".join(langs) or "?", "rtype": ", ".join(types),
                      "auctions": r["auctions"], "items": r["items"], "deals": r["deals"],
                      "deal_value": r["deal_value"], "flips": r["flips"], "flip_profit": r["flip_profit"],
