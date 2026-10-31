@@ -274,6 +274,9 @@ const COLS = {
     { k: "quality", t: "Qualität", f: r => `<span class="q-${r.quality}">${QUAL[r.quality] || "-"}</span>` },
     { k: "buy_realm", t: "Kaufen auf" },
     { k: "buy", t: "Kaufpreis", num: 1, f: r => gold(r.buy) },
+    { k: "eu_min", t: "EU-weit", nosort: 1, f: r => r.eu_min == null ? '<span class="sub">-</span>'
+        : r.eu_cheapest ? `<span class="g">✓ günstigster</span><div class="sub">von ${r.eu_n} Realms</div>`
+        : `<span class="o">Platz ${r.eu_rank} von ${r.eu_n}</span><div class="sub">${gold(r.eu_min)} ${esc(r.eu_min_realm)}</div>` },
     { k: "qty", t: "Anz.", num: 1 },
     { k: "sell_realm", t: "Verkaufen auf", f: r => r.estimated ? `<span class="est" title="Dort kein Angebot - geschätzt mit Region-Verkaufs-Ø">${r.sell_realm} *</span>` : r.sell_realm },
     { k: "usual", t: "Üblich (Ø)", num: 1, f: r => gold(r.usual) },
@@ -422,7 +425,7 @@ function render(data) {
         `<td class="${c.num ? "num" : ""}">${c.f ? c.f(r) : esc(r[c.k] ?? "-")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     document.querySelectorAll("th[data-s]").forEach(th => th.onclick = () => {
       const k = th.dataset.s;
-      if (/^p\d+$/.test(k)) return;
+      if (/^p\d+$/.test(k) || (cols.find(c => c.k === k) || {}).nosort) return;
       if (state.sort === k) state.desc = !state.desc; else { state.sort = k; state.desc = !["name", "buy_realm", "sell_realm", "realm"].includes(k); }
       state.offset = 0; load();
     });

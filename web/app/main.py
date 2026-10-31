@@ -218,7 +218,34 @@ def flips(min_profit: float = 100, min_return: float = 30, min_rate: float = 0.0
                          lowest_there=lowest, estimated=est, profit=int(profit), ret=round(ret, 1),
                          sale_rate=t.get("sale_rate"), sold_per_day=t.get("sold_per_day"))
                 rows.append(r)
-    return page(rows, sort, desc, offset, limit)
+    res = page(rows, sort, desc, offset, limit)
+    add_eu_cheapest(d, res["rows"], "buy")
+    return res
+
+
+def add_eu_cheapest(d, rows, price_field):
+    """Zu jeder Zeile: günstigstes Angebot EU-weit und der Platz des eigenen Kaufpreises darin."""
+    keys = list({r["key"] for r in rows})
+    if not keys:
+        return
+    per = {}
+    with C.db() as con:
+        q = ",".join("?" * len(keys))
+        for x in con.execute(f"SELECT item_key, cr_id, min_buyout FROM eu_listing WHERE item_key IN ({q})", keys):
+            per.setdefault(x["item_key"], {})[x["cr_id"]] = x["min_buyout"]
+        for x in con.execute(f"SELECT item_key, cr_id, min_buyout FROM listing WHERE item_key IN ({q})", keys):
+            per.setdefault(x["item_key"], {})[x["cr_id"]] = x["min_buyout"]  # eigene Realms: stündlich
+    own = set(d["crs"])
+    for r in rows:
+        offers = per.get(r["key"], {})
+        if not offers:
+            continue
+        cr, low = min(offers.items(), key=lambda x: x[1])
+        price = r[price_field]
+        r.update(eu_min=low, eu_n=len(offers),
+                 eu_min_realm=realm_short(d, cr) if cr in own else realm_full(d, cr).split(",")[0],
+                 eu_rank=1 + sum(1 for p in offers.values() if p < price),
+                 eu_cheapest=price <= low)
 
 
 @app.get("/api/deals")
